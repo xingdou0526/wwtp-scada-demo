@@ -3,14 +3,23 @@ import cors from "cors";
 import { createSimulation } from "./simulator.js";
 import { createAdvisor, operationReviewStatus } from "./advisor.js";
 import { openOperationStore, OperationStorageError } from "./operation-store.js";
+import { ManagementError, openManagementStore } from "./management-store.js";
+import { managementRoutes } from "./management-routes.js";
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-
-const sim = createSimulation();
+const management = openManagementStore();
+const sim = createSimulation(management.data.limits);
 const advisor = createAdvisor(sim, openOperationStore());
 advisor.interruptReviews("restart");
+
+app.use("/api/admin", managementRoutes(management, sim, advisor));
+app.get("/api/knowledge/:id", (req, res) => {
+  const entry = management.getKnowledge(req.params.id);
+  if (!entry) return res.status(404).json({ error: "知识条目不存在" });
+  res.json(entry);
+});
+app.use(cors());
+app.use(express.json());
 
 // 历史窗口：用于规则判断与前端曲线
 const history = []; // 真实值
@@ -52,6 +61,7 @@ app.get("/api/state", (req, res) => {
   res.json({
     state: sim.state,
     limits: sim.LIMITS,
+    terms: management.data.terms,
     history,
     activeAdvice: advisor.advices.find((a) => a.status === "pending") || null,
     advices: advisor.advices.slice(0, 20),
@@ -114,12 +124,18 @@ app.post("/api/reset", (req, res) => {
 });
 
 app.use((error, _req, res, next) => {
+  if (error instanceof ManagementError) {
+    if (error.cause) console.error("[server] 保存后台配置失败", error.cause);
+    return res.status(error.status).json({ ok: false, error: error.message });
+  }
+  if (error.type === "entity.too.large") return res.status(413).json({ error: "提交的内容过大" });
+  if (error.type === "entity.parse.failed") return res.status(400).json({ error: "请求数据格式无效" });
   if (!(error instanceof OperationStorageError)) return next(error);
   console.error("[server] 保存操作记录失败", error.cause);
   res.status(503).json({ ok: false, error: error.message });
 });
 
-const PORT = 3001;
+const PORT = Number(process.env.WWTP_PORT ?? 3001);
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`[server] API listening on http://127.0.0.1:${PORT}`);
 });

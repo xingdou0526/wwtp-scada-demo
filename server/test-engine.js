@@ -2,7 +2,7 @@
 import { createSimulation } from "./simulator.js";
 import { createAdvisor } from "./advisor.js";
 
-const sim = createSimulation();
+const sim = createSimulation(undefined, { random: () => 0.5 });
 const advisor = createAdvisor(sim);
 const history = [];
 const measuredHistory = [];

@@ -1,20 +1,13 @@
 // 曝气 AI 辅助决策规则引擎：只输出建议，执行必须人工触发
-import { LIMITS } from "./simulator.js";
+import { KNOWLEDGE_REFS as KB } from "./management-defaults.js";
 
 let adviceSeq = 0;
 const MAX_NOTE_LENGTH = 1000;
 
-// 知识库引用（第 6 步后台知识库的条目编号）
-const KB = {
-  aeration: "KB-AER-001",
-  sensor: "KB-AER-002",
-  energy: "KB-AER-003",
-  nitrification: "KB-AER-004",
-};
-
 export function createAdvisor(sim, { initialOperations = [], saveOperations = () => {} } = {}) {
   const advices = [];
   let operations = initialOperations;
+  let loadRising = false;
   for (const { adviceId } of operations) {
     const sequence = /^ADV-(\d+)$/.exec(adviceId);
     if (sequence) adviceSeq = Math.max(adviceSeq, Number(sequence[1]));
@@ -42,6 +35,39 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     return advices.find((a) => a.status === "pending");
   }
 
+  function invalidatePending(reason = "limits") {
+    const advice = activeAdvice();
+    if (advice) {
+      advice.status = "expired";
+      advice.invalidatedBy = reason;
+    }
+  }
+
+  function executionRestriction() {
+    const { tick, lastExecuteTick } = sim.state;
+    if (lastExecuteTick >= 0 && tick - lastExecuteTick < sim.LIMITS.minExecuteInterval) {
+      return "距上次调节间隔不足";
+    }
+    if (operations.some((op) => operationReviewStatus(op) === "pending" && op.reviewDueTick > tick)) {
+      return "上次调节尚未到复评时间";
+    }
+    return "";
+  }
+
+  function adjustmentRestriction(action) {
+    const { measured, fault, bio, effluent, influent, scenario } = sim.state;
+    const limits = sim.LIMITS;
+    if (fault.airflowFeedback || measured.airflowQuality !== "good") return "风量反馈不可信，请先排查仪表";
+    if (fault.doDrift || fault.doStuck || fault.doOffline || measured.doQuality !== "good") return "DO 测量数据不可信，请先排查仪表";
+    if (action.from !== bio.doSetpoint) return "当前 DO 目标值已变化，请查看新建议";
+    if (action.to > action.from && bio.airflow > limits.airflowMax * 0.95) return "风量已接近上限，请先核查供氧能力";
+    if (action.to < action.from && (scenario.shock || scenario.storm || loadRising ||
+      !(scenario.night || influent.flow < 700) || effluent.nh4 >= Math.min(0.5, limits.nh4InternalLimit))) {
+      return "当前负荷或出水氨氮已超出节能调节条件";
+    }
+    return "";
+  }
+
   // 滑动窗口统计
   function windowStats(history, key, len) {
     const vals = history.slice(-len).map((h) => h[key]).filter((v) => v !== null && v !== undefined);
@@ -55,29 +81,40 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
 
   function evaluate(history, measuredHistory) {
     const s = sim.state;
+    const limits = sim.LIMITS;
+    const flowWin = windowStats(history, "flow", 60);
+    const nh4Win = windowStats(history, "infNh4", 60);
+    const flowRising = flowWin && flowWin.last > flowWin.first * 1.15;
+    const nh4Rising = nh4Win && nh4Win.last > nh4Win.first * 1.2;
+    loadRising = Boolean(flowRising || nh4Rising);
+    const doVal = s.measured.do;
+    const quality = s.measured.doQuality;
+    const inspection = quality === "bad" ? "inspect-sensor" : s.measured.airflowQuality === "bad" ? "inspect-airflow" : null;
+
     // 过期处理
     for (const a of advices) {
       if (a.status === "pending" && a.expiresAtTick <= s.tick) a.status = "expired";
     }
-    // 已有待处理建议时不重复生成
+    const pending = activeAdvice();
+    if (pending) {
+      const instrumentAdvice = pending.kind === "inspect-sensor" || pending.kind === "inspect-airflow";
+      const inspectionChanged = (inspection || instrumentAdvice) && pending.kind !== inspection;
+      const unsafeAdjustment = pending.action && adjustmentRestriction(pending.action);
+      if (inspectionChanged || unsafeAdjustment) invalidatePending("conditions");
+    }
     if (activeAdvice()) return;
 
     // 同类建议冷却期，避免过期/忽略后反复刷屏
     function cooledDown(kind, ticks) {
-      const last = advices.find((a) => a.kind === kind);
+      const last = advices.find((a) => a.kind === kind && !a.invalidatedBy);
       return !last || s.tick - last.createdTick >= ticks;
     }
 
-    const doVal = s.measured.do;
-    const quality = s.measured.doQuality;
-    const canExecute = s.tick - s.lastExecuteTick >= LIMITS.minExecuteInterval;
-    const flowWinEarly = windowStats(history, "flow", 60);
-    const nh4WinEarly = windowStats(history, "infNh4", 60);
-    const flowRisingEarly = flowWinEarly && flowWinEarly.last > flowWinEarly.first * 1.15;
-    const nh4RisingEarly = nh4WinEarly && nh4WinEarly.last > nh4WinEarly.first * 1.2;
+    const restriction = executionRestriction();
 
     // R0：数据不可用 → 仅建议排查仪表，禁止调节
-    if (quality === "bad" && cooledDown("inspect-sensor", 30)) {
+    if (inspection === "inspect-sensor") {
+      if (!cooledDown(inspection, 30)) return;
       addAdvice({
         kind: "inspect-sensor",
         type: "inspect",
@@ -99,12 +136,32 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
       return;
     }
 
+    if (inspection === "inspect-airflow") {
+      if (!cooledDown(inspection, 30)) return;
+      addAdvice({
+        kind: inspection,
+        type: "inspect",
+        priority: "high",
+        title: "风量反馈异常，建议先核查仪表与联动信号",
+        action: null,
+        reasons: [
+          { label: "反馈风量", value: `${s.measured.airflow.toFixed(0)} m³/h，数据质量异常` },
+        ],
+        dataQuality: "bad",
+        constraints: ["风量数据不可信期间暂停曝气调节建议"],
+        forecast: { note: "核实反馈信号后重新评估当前供氧状态" },
+        risks: [],
+        knowledgeRef: KB.sensor,
+        expiresAtTick: s.tick + 60,
+        reviewAfterTick: s.tick + 30,
+      });
+      return;
+    }
+
     const doWin = windowStats(measuredHistory, "do", 10);
-    const flowWin = windowStats(history, "flow", 60);
-    const nh4Win = windowStats(history, "infNh4", 60);
     if (!doWin || doVal === null) return;
 
-    const nearAirflowCap = s.bio.airflow > LIMITS.airflowMax * 0.95;
+    const nearAirflowCap = s.bio.airflow > limits.airflowMax * 0.95;
 
     // R1：DO 持续低于目标 → 建议上调 DO 目标值
     if (doWin.avg < s.bio.doSetpoint - 0.35) {
@@ -130,9 +187,9 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         });
         return;
       }
-      if (quality === "suspect") return; // 数据可疑时不出调节建议
+      if (quality !== "good") return;
       if (!cooledDown("raise", 15)) return;
-      const to = round1(Math.min(LIMITS.doSetpointMax, s.bio.doSetpoint + LIMITS.doSetpointStep));
+      const to = round1(Math.min(limits.doSetpointMax, s.bio.doSetpoint + limits.doSetpointStep));
       if (to === s.bio.doSetpoint) return;
       addAdvice({
         kind: "raise",
@@ -143,15 +200,15 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         reasons: [
           { label: "好氧区 DO", value: `近 10 分钟均值 ${doWin.avg.toFixed(2)} mg/L，低于目标 ${s.bio.doSetpoint.toFixed(1)} mg/L` },
           { label: "进水负荷", value: `流量 ${s.influent.flow.toFixed(0)} m³/h，进水氨氮 ${s.influent.nh4.toFixed(1)} mg/L` },
-          { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L（内控 ${LIMITS.nh4InternalLimit} mg/L）` },
+          { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L（内控 ${limits.nh4InternalLimit} mg/L）` },
         ],
         dataQuality: quality,
         constraints: [
-          canExecute ? "距上次调节满足最小间隔" : "间隔约束未满足",
-          `调整后目标 ${to.toFixed(1)} mg/L，处于 ${LIMITS.doSetpointMin}~${LIMITS.doSetpointMax} 允许范围`,
-          `单次步长 ${LIMITS.doSetpointStep} mg/L，由现有联动系统自动增加风量`,
+          restriction || "已满足最小调节间隔与复评约束",
+          `调整后目标 ${to.toFixed(1)} mg/L，处于 ${limits.doSetpointMin}~${limits.doSetpointMax} 允许范围`,
+          `单次步长 ${limits.doSetpointStep} mg/L，由现有联动系统自动增加风量`,
         ],
-        blocked: !canExecute,
+        blocked: Boolean(restriction),
         forecast: {
           doRange: `${(to - 0.2).toFixed(1)} ~ ${(to + 0.2).toFixed(1)} mg/L`,
           responseMinutes: "30~45 分钟逐步趋稳",
@@ -161,7 +218,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         risks: ["曝气增加将带来电耗上升", "若 DO 持续不回升，需排查曝气器或风量反馈"],
         knowledgeRef: KB.aeration,
         expiresAtTick: s.tick + 15,
-        reviewAfterTick: s.tick + LIMITS.reviewAfter,
+        reviewAfterTick: s.tick + limits.reviewAfter,
       });
       return;
     }
@@ -171,12 +228,12 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     const doHighWin = windowStats(measuredHistory, "do", 15);
     if (
       doHighWin && doHighWin.avg > s.bio.doSetpoint + 0.7 &&
-      s.effluent.nh4 < 0.5 && lowLoad && quality === "good" &&
-      s.bio.doSetpoint > LIMITS.doSetpointMin &&
-      !s.scenario.shock && !s.scenario.storm && !nh4RisingEarly && !flowRisingEarly &&
+      s.effluent.nh4 < Math.min(0.5, limits.nh4InternalLimit) && lowLoad && quality === "good" &&
+      s.bio.doSetpoint > limits.doSetpointMin &&
+      !s.scenario.shock && !s.scenario.storm && !loadRising &&
       cooledDown("lower", 90)
     ) {
-      const to = round1(Math.max(LIMITS.doSetpointMin, s.bio.doSetpoint - LIMITS.doSetpointStep));
+      const to = round1(Math.max(limits.doSetpointMin, s.bio.doSetpoint - limits.doSetpointStep));
       addAdvice({
         kind: "lower",
         type: "adjust",
@@ -190,10 +247,10 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         ],
         dataQuality: quality,
         constraints: [
-          canExecute ? "距上次调节满足最小间隔" : "间隔约束未满足",
-          `调整后目标 ${to.toFixed(1)} mg/L，不低于下限 ${LIMITS.doSetpointMin} mg/L`,
+          restriction || "已满足最小调节间隔与复评约束",
+          `调整后目标 ${to.toFixed(1)} mg/L，不低于下限 ${limits.doSetpointMin} mg/L`,
         ],
-        blocked: !canExecute,
+        blocked: Boolean(restriction),
         forecast: {
           doRange: `${(to - 0.2).toFixed(1)} ~ ${(to + 0.2).toFixed(1)} mg/L`,
           responseMinutes: "20~40 分钟逐步趋稳",
@@ -203,15 +260,13 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         risks: ["若负荷突然回升，需及时恢复 DO 目标", "下调后需关注出水氨氮变化"],
         knowledgeRef: KB.energy,
         expiresAtTick: s.tick + 15,
-        reviewAfterTick: s.tick + LIMITS.reviewAfter,
+        reviewAfterTick: s.tick + limits.reviewAfter,
       });
       return;
     }
 
     // R3：进水负荷快速上升的前瞻提示（DO 尚未跌破时）
-    const flowRising = flowWin && flowWin.last > flowWin.first * 1.15;
-    const nh4Rising = nh4Win && nh4Win.last > nh4Win.first * 1.2;
-    if ((flowRising || nh4Rising) && quality === "good" && doVal > s.bio.doSetpoint - 0.35 && cooledDown("observe", 60)) {
+    if (loadRising && quality === "good" && doVal > s.bio.doSetpoint - 0.35 && cooledDown("observe", 60)) {
       addAdvice({
         kind: "observe",
         type: "observe",
@@ -237,7 +292,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
 
     // R4：DO 正常但出水氨氮超标 → 非曝气因素排查
     if (
-      s.effluent.nh4 > LIMITS.nh4InternalLimit &&
+      s.effluent.nh4 > limits.nh4InternalLimit &&
       Math.abs(doVal - s.bio.doSetpoint) < 0.4 && quality === "good" &&
       cooledDown("inspect-nh4", 60)
     ) {
@@ -248,7 +303,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         title: "出水氨氮超内控，但 DO 正常：建议排查非曝气因素",
         action: null,
         reasons: [
-          { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L，超内控 ${LIMITS.nh4InternalLimit} mg/L` },
+          { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L，超内控 ${limits.nh4InternalLimit} mg/L` },
           { label: "好氧区 DO", value: `${doVal.toFixed(2)} mg/L，处于目标范围内` },
           { label: "水温", value: `${s.influent.temp.toFixed(0)} ℃${s.influent.temp < 15 ? "，低温抑制硝化活性" : ""}` },
         ],
@@ -264,27 +319,31 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
   }
 
   function execute(id, operatorNote = "") {
+    const limits = sim.LIMITS;
     const a = advices.find((x) => x.id === id);
     if (!a) return { ok: false, error: "建议不存在" };
+    if (a.invalidatedBy === "limits") return { ok: false, error: "规则参数已更新，请查看新建议" };
+    if (a.invalidatedBy === "conditions") return { ok: false, error: "工况或数据质量已变化，请查看新建议" };
     if (a.status !== "pending") return { ok: false, error: `建议状态为 ${a.status}，不可执行` };
     if (a.expiresAtTick <= sim.state.tick) {
       a.status = "expired";
       return { ok: false, error: "建议已过期" };
     }
     if (a.type !== "adjust" || !a.action) return { ok: false, error: "该建议为排查/观察类，无调节动作" };
-    if (a.blocked) return { ok: false, error: "约束未满足：距上次调节间隔不足" };
+    if (a.blocked) return { ok: false, error: executionRestriction() || "请等待可执行的新建议" };
+    const safety = adjustmentRestriction(a.action);
+    if (safety) return { ok: false, error: safety };
 
     // 执行前再次校验安全边界
     const { from, to } = a.action;
-    if (to < LIMITS.doSetpointMin || to > LIMITS.doSetpointMax) {
+    if (to < limits.doSetpointMin || to > limits.doSetpointMax) {
       return { ok: false, error: "目标值超出允许范围，已拦截" };
     }
-    if (Math.abs(to - from) > LIMITS.doSetpointStep + 1e-9) {
+    if (Math.abs(to - from) > limits.doSetpointStep + 1e-9) {
       return { ok: false, error: "单次调整步长超限，已拦截" };
     }
-    if (sim.state.tick - sim.state.lastExecuteTick < LIMITS.minExecuteInterval) {
-      return { ok: false, error: "距上次调节间隔不足，已拦截" };
-    }
+    const restriction = executionRestriction();
+    if (restriction) return { ok: false, error: restriction };
     if (!validNote(operatorNote)) return { ok: false, error: "人工备注限 1000 字以内" };
 
     reviewOperations();
@@ -300,7 +359,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
       before,
       during: { ...a.action, reasons: a.reasons, forecast: a.forecast },
       after: null, // 复评时回填
-      reviewDueTick: sim.state.tick + LIMITS.reviewAfter,
+      reviewDueTick: sim.state.tick + limits.reviewAfter,
       operatorNote: operatorNote.trim(),
       feedback: null,
     };
@@ -363,6 +422,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     advices,
     get operations() { return operations; },
     evaluate,
+    invalidatePending,
     execute,
     ignore,
     updateFeedback,

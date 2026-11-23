@@ -1,7 +1,14 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { BookOpen } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { matchTerms, type Term } from "@/lib/terms";
+import { createTermMatcher, type Term } from "@/lib/terms";
+
+const TermMatcher = createContext(createTermMatcher([]));
+
+export function TermProvider({ terms, children }: { terms: Term[]; children: ReactNode }) {
+  const match = useMemo(() => createTermMatcher(terms), [terms]);
+  return <TermMatcher.Provider value={match}>{children}</TermMatcher.Provider>;
+}
 
 export function TermTip({ word, term }: { word: string; term: Term }) {
   return (
@@ -26,7 +33,8 @@ export function TermTip({ word, term }: { word: string; term: Term }) {
 
 // 自动识别文本中的术语并附加悬浮解释
 export function ExplainText({ text }: { text: string }) {
-  const parts = matchTerms(text);
+  const match = useContext(TermMatcher);
+  const parts = match(text);
   return (
     <>
       {parts.map((p, i): ReactNode =>

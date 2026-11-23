@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Droplets, Clock3 } from "lucide-react";
+import { Activity, Droplets, Clock3, LayoutDashboard, Settings2, ChartNoAxesCombined } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { AdminPage } from "@/components/AdminPage";
 import { ScenarioBar } from "@/components/ScenarioBar";
 import { ProcessFlow } from "@/components/ProcessFlow";
 import { TrendChart } from "@/components/TrendChart";
@@ -8,10 +10,17 @@ import { AdvicePanel } from "@/components/AdvicePanel";
 import { fetchState, postJson, formatClock } from "@/lib/api";
 
 export default function App() {
+  const [adminOpen, setAdminOpen] = useState(() => window.location.hash === "#admin");
   const [data, setData] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const syncPage = () => setAdminOpen(window.location.hash === "#admin");
+    window.addEventListener("hashchange", syncPage);
+    return () => window.removeEventListener("hashchange", syncPage);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -67,34 +76,45 @@ export default function App() {
 
   const state = data?.state;
   const history = data?.history ?? [];
+  const clockMinutes = history.map((sample: any) => sample.clockMinutes);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-slate-50">
-      <header className="shrink-0 border-b bg-white">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-6 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Droplets className="size-7 text-primary" />
+    <div className="app-canvas flex h-dvh flex-col overflow-hidden">
+      <header className="app-header shrink-0 border-b">
+        <div className="mx-auto flex max-w-[1720px] flex-col gap-3 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/35 bg-primary/10 text-primary">
+                <Droplets aria-hidden className="size-5" />
+              </span>
               <div>
-                <h1 className="text-lg font-bold leading-tight">水质净化厂智能中控仿真平台</h1>
-                <p className="text-xs text-muted-foreground">曝气环节 AI 辅助决策 · 预研 Demo（模拟数据，不连接真实设备）</p>
+                <h1 className="text-base font-semibold leading-tight tracking-tight sm:text-lg">水质净化厂智能中控仿真平台</h1>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">曝气 AI 辅助决策 · 模拟数据</p>
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              {state && (
-                <span className="flex items-center gap-1.5 whitespace-nowrap text-sm font-medium">
-                  <Clock3 className="size-4 text-muted-foreground" />
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+              {state && !adminOpen && (
+                <span className="flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-card px-2.5 py-1 text-xs font-medium tabular-nums">
+                  <Clock3 aria-hidden className="size-3.5 text-primary" />
                   仿真时间 {formatClock(state.clockMinutes)}
                   <span className="text-xs text-muted-foreground">（{state.tick} min）</span>
                 </span>
               )}
-              <Badge variant={connected ? "default" : "destructive"}>
-                <Activity className="size-3" />
+              <Badge variant="outline" className={connected ? "border-success/30 bg-success/10 text-success" : "border-critical/40 bg-critical/10 text-critical"}>
+                <Activity aria-hidden className="size-3" />
                 {connected ? "服务已连接" : "服务未连接"}
               </Badge>
+              <nav aria-label="工作区" className="flex items-center gap-1">
+                <Button asChild size="sm" variant={adminOpen ? "ghost" : "secondary"}>
+                  <a href="#control" aria-current={adminOpen ? undefined : "page"}><LayoutDashboard aria-hidden /> 中控台</a>
+                </Button>
+                <Button asChild size="sm" variant={adminOpen ? "secondary" : "ghost"}>
+                  <a href="#admin" aria-current={adminOpen ? "page" : undefined}><Settings2 aria-hidden /> 后台管理</a>
+                </Button>
+              </nav>
             </div>
           </div>
-          {state && (
+          {state && !adminOpen && (
             <ScenarioBar
               scenario={state.scenario}
               fault={state.fault}
@@ -106,56 +126,67 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-[1600px] min-h-0 flex-1 flex-col gap-4 overflow-hidden px-6 py-4">
-        {error && (
-          <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+      <main className="mx-auto flex w-full max-w-[1720px] min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
+        {!adminOpen && error && (
+          <p role="alert" className="advice-enter rounded-md border border-critical/40 bg-critical/10 px-3 py-2 text-sm text-critical">
             {error}
           </p>
         )}
-        {!state ? (
+        {adminOpen ? (
+          <AdminPage setpoint={state?.bio.doSetpoint} onChange={load} />
+        ) : !state ? (
           <p className="py-20 text-center text-sm text-muted-foreground">正在连接仿真服务…</p>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:flex-row lg:overflow-hidden">
-            <div className="flex min-w-0 flex-1 flex-col gap-4 lg:overflow-y-auto lg:pr-1">
-              <ProcessFlow state={state} limits={data.limits} />
-              <section aria-label="关键参数趋势" className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
-                <TrendChart
-                  title="好氧区 DO（测量值）"
-                  unit="mg/L"
-                  color="#1d4ed8"
-                  points={history.map((h: any) => h.measuredDo)}
-                  current={state.measured.do === null ? "--" : state.measured.do.toFixed(2)}
-                  reference={{ value: state.bio.doSetpoint, label: "目标" }}
-                />
-                <TrendChart
-                  title="曝气风量"
-                  unit="m³/h"
-                  color="#0d9488"
-                  points={history.map((h: any) => h.airflow)}
-                  current={state.bio.airflow.toFixed(0)}
-                />
-                <TrendChart
-                  title="出水氨氮"
-                  unit="mg/L"
-                  color="#dc2626"
-                  points={history.map((h: any) => h.effNh4)}
-                  current={state.effluent.nh4.toFixed(2)}
-                  reference={{ value: data.limits.nh4InternalLimit, label: "内控" }}
-                />
-                <TrendChart
-                  title="风机功率"
-                  unit="kW"
-                  color="#d97706"
-                  points={history.map((h: any) => h.power)}
-                  current={state.blower.power.toFixed(1)}
-                />
-              </section>
+          <div className="page-enter flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto scroll-smooth lg:flex-row lg:overflow-hidden">
+            <div className="flex min-w-0 flex-1 flex-col lg:overflow-y-auto lg:pr-2">
+              <ProcessFlow state={state} limits={data.limits} history={history}>
+                <section aria-labelledby="trend-heading" className="space-y-2.5">
+                  <h3 id="trend-heading" className="flex items-center gap-2 text-sm font-semibold"><ChartNoAxesCombined aria-hidden className="size-4 text-primary" /> 关键参数趋势</h3>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
+                    <TrendChart
+                      title="好氧区 DO（测量值）"
+                      unit="mg/L"
+                      color="var(--primary)"
+                      points={history.map((h: any) => h.measuredDo)}
+                      current={state.measured.do === null ? "—" : state.measured.do.toFixed(2)}
+                      reference={{ value: state.bio.doSetpoint, label: "目标" }}
+                      clockMinutes={clockMinutes}
+                    />
+                    <TrendChart
+                      title="曝气风量（反馈）"
+                      unit="m³/h"
+                      color="var(--success)"
+                      points={history.map((h: any) => h.measuredAirflow ?? h.airflow)}
+                      current={(state.measured.airflow ?? state.bio.airflow).toFixed(0)}
+                      clockMinutes={clockMinutes}
+                    />
+                    <TrendChart
+                      title="出水氨氮"
+                      unit="mg/L"
+                      color="var(--warning)"
+                      points={history.map((h: any) => h.effNh4)}
+                      current={state.effluent.nh4.toFixed(2)}
+                      reference={{ value: data.limits.nh4InternalLimit, label: "内控" }}
+                      clockMinutes={clockMinutes}
+                    />
+                    <TrendChart
+                      title="风机功率"
+                      unit="kW"
+                      color="#d6e3ff"
+                      points={history.map((h: any) => h.power)}
+                      current={state.blower.power.toFixed(1)}
+                      clockMinutes={clockMinutes}
+                    />
+                  </div>
+                </section>
+              </ProcessFlow>
             </div>
             <AdvicePanel
               activeAdvice={data.activeAdvice}
               advices={data.advices}
               tick={state.tick}
               onAction={load}
+              terms={data.terms ?? []}
             />
           </div>
         )}
