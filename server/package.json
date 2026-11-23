@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node index.js"
+    "dev": "node index.js",
+    "verify": "node --test test-engine.js test-operations.js test-management.js verify-step7.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

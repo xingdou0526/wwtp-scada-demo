@@ -67,7 +67,7 @@ function DialogContent({
             className="opacity-60 transition-opacity group-hover:opacity-100"
             size={16}
           />
-          <span className="sr-only">Close</span>
+          <span className="sr-only">关闭</span>
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPortal>

@@ -5,15 +5,21 @@ export async function fetchState() {
   return r.json();
 }
 
-export async function postJson(url: string, body?: unknown) {
+export async function requestJson<T>(url: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+  const { method, body, signal } = options;
   const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
+    method,
+    signal,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "request failed");
+  const data = await r.json().catch(() => null);
+  if (!r.ok || data === null) throw new Error(data?.error || "请求失败，请检查仿真服务后重试");
   return data;
+}
+
+export function postJson(url: string, body?: unknown) {
+  return requestJson<any>(url, { method: "POST", body });
 }
 
 interface OperationSnapshot {
@@ -35,6 +41,7 @@ export interface OperationRecord {
   id: string;
   adviceId: string;
   title: string;
+  knowledgeRef?: string;
   executeTime: string;
   before: OperationSnapshot;
   during: {

@@ -1,5 +1,5 @@
 // 工艺仿真引擎：1 tick = 1 仿真分钟，按因果关系演化各环节数据
-export const LIMITS = {
+export const LIMITS = Object.freeze({
   doSetpointMin: 1.5,
   doSetpointMax: 3.0,
   doSetpointStep: 0.2,
@@ -8,13 +8,11 @@ export const LIMITS = {
   nh4InternalLimit: 1.0,
   minExecuteInterval: 30, // tick
   reviewAfter: 30, // tick
-};
+});
+
+export const MAX_SIMULATED_DO = 8;
 
 const BASE = { flow: 950, cod: 118, nh4: 25, temp: 25 };
-
-function noise(amp) {
-  return (Math.random() - 0.5) * 2 * amp;
-}
 
 // 进水日曲线：早晚高峰、夜间低谷
 function diurnal(hour) {
@@ -24,15 +22,18 @@ function diurnal(hour) {
   return 0.85 + 0.25 * morning + 0.2 * evening - 0.25 * night;
 }
 
-export function createSimulation() {
+export function createSimulation(configuredLimits = LIMITS, { random = Math.random } = {}) {
+  let limits = { ...configuredLimits };
+  const noise = (amplitude) => (random() - 0.5) * 2 * amplitude;
+  const initialSetpoint = clamp(2.0, limits.doSetpointMin, limits.doSetpointMax);
   const state = {
     tick: 0,
     clockMinutes: 8 * 60, // 仿真时间从 08:00 开始
     scenario: { storm: false, winter: false, summer: false, night: false, shock: false },
-    fault: { doDrift: false, doStuck: false, doSpike: false, doOffline: false },
+    fault: { doDrift: false, doStuck: false, doSpike: false, doOffline: false, airflowFeedback: false },
     influent: { flow: BASE.flow, cod: BASE.cod, nh4: BASE.nh4, temp: BASE.temp },
-    bio: { do: 2.0, doSetpoint: 2.0, mlss: 10000, airflow: 1100, airflowDemand: 1100, our: 0 },
-    measured: { do: 2.0, doQuality: "good", doFaultType: null },
+    bio: { do: 2.0, doSetpoint: initialSetpoint, mlss: 10000, airflow: 1100, airflowDemand: 1100, our: 0 },
+    measured: { do: 2.0, doQuality: "good", doFaultType: null, airflow: 1100, airflowQuality: "good" },
     membrane: { tmp: 18, flux: 15 },
     effluent: { nh4: 0.3, cod: 9, tn: 11.5, tp: 0.2 },
     blower: { power: 55, energyKwh: 0, pressure: 68, current: 95, running: true },
@@ -73,13 +74,13 @@ export function createSimulation() {
 
     // 自动联动：根据 DO 偏差调节风量需求（模拟现场已有 PID，存在响应滞后）
     const err = bio.doSetpoint - bio.do;
-    bio.airflowDemand = clamp(bio.airflowDemand + err * 2.5, LIMITS.airflowMin, LIMITS.airflowMax);
+    bio.airflowDemand = clamp(bio.airflowDemand + err * 2.5, limits.airflowMin, limits.airflowMax);
     // 风量一阶追踪（时间常数约 3 分钟）
     bio.airflow += (bio.airflowDemand - bio.airflow) * 0.3;
 
     // 供氧与 DO 平衡：供氧超出需氧越多，DO 平衡值越高
     const oxySupply = bio.airflow * 0.16 * (inf.temp >= 28 ? 0.92 : 1); // 夏季氧转移效率略降
-    const doEquilibrium = clamp(1.0 + ((oxySupply - our) / our) * 6, 0, 8);
+    const doEquilibrium = clamp(1.0 + ((oxySupply - our) / our) * 6, 0, MAX_SIMULATED_DO);
     // DO 一阶响应（时间常数约 15 分钟）
     bio.do += (doEquilibrium - bio.do) * 0.065;
     bio.do = Math.max(0, bio.do);
@@ -150,6 +151,8 @@ export function createSimulation() {
     measured.do = value === null ? null : Math.max(0, value);
     measured.doQuality = quality;
     measured.doFaultType = faultType;
+    measured.airflow = fault.airflowFeedback ? bio.airflow * 0.72 : bio.airflow;
+    measured.airflowQuality = fault.airflowFeedback ? "bad" : "good";
   }
 
   function tick() {
@@ -164,7 +167,7 @@ export function createSimulation() {
   }
 
   function setScenario(key, enabled) {
-    if (!(key in state.scenario)) return false;
+    if (!Object.hasOwn(state.scenario, key) || typeof enabled !== "boolean") return false;
     if (key === "winter" && enabled) state.scenario.summer = false;
     if (key === "summer" && enabled) state.scenario.winter = false;
     state.scenario[key] = enabled;
@@ -172,13 +175,13 @@ export function createSimulation() {
   }
 
   function injectFault(type, enabled) {
-    if (!(type in state.fault)) return false;
+    if (!Object.hasOwn(state.fault, type) || typeof enabled !== "boolean") return false;
     state.fault[type] = enabled;
     return true;
   }
 
   function reset() {
-    const fresh = createSimulation();
+    const fresh = createSimulation(limits, { random });
     Object.keys(state).forEach((k) => { state[k] = fresh.state[k]; });
     driftAccum = 0;
     stuckValue = null;
@@ -191,6 +194,8 @@ export function createSimulation() {
       do: state.bio.do,
       doSetpoint: state.bio.doSetpoint,
       airflow: state.bio.airflow,
+      measuredAirflow: state.measured.airflow,
+      tmp: state.membrane.tmp,
       power: state.blower.power,
       effNh4: state.effluent.nh4,
       flow: state.influent.flow,
@@ -199,7 +204,11 @@ export function createSimulation() {
     };
   }
 
-  return { state, tick, setScenario, injectFault, reset, snapshot, LIMITS };
+  function configureLimits(next) {
+    limits = { ...next };
+  }
+
+  return { state, tick, setScenario, injectFault, reset, snapshot, configureLimits, get LIMITS() { return limits; } };
 }
 
 function clamp(v, min, max) {
