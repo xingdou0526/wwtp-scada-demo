@@ -1,0 +1,79 @@
+// API 封装
+export async function fetchState() {
+  const r = await fetch("/api/state");
+  if (!r.ok) throw new Error("state fetch failed");
+  return r.json();
+}
+
+export async function postJson(url: string, body?: unknown) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "request failed");
+  return data;
+}
+
+interface OperationSnapshot {
+  tick: number;
+  do: number;
+  doSetpoint: number;
+  airflow: number;
+  power: number;
+  effNh4: number;
+}
+
+export interface OperationFeedbackInput {
+  operatorNote: string;
+  evaluation: string;
+  effective: boolean | null;
+}
+
+export interface OperationRecord {
+  id: string;
+  adviceId: string;
+  title: string;
+  executeTime: string;
+  before: OperationSnapshot;
+  during: {
+    from: number;
+    to: number;
+    reasons: { label: string; value: string }[];
+    forecast: {
+      doRange?: string;
+      responseMinutes?: string;
+      nh4Trend?: string;
+      energyDeltaPct?: string;
+    };
+  };
+  after: OperationSnapshot | null;
+  reviewDueTick: number;
+  reviewInterrupted?: "reset" | "restart";
+  operatorNote: string;
+  feedback: (Omit<OperationFeedbackInput, "operatorNote"> & { updatedAt: string }) | null;
+}
+
+export async function fetchOperations(signal: AbortSignal): Promise<OperationRecord[]> {
+  const response = await fetch("/api/operations", { signal });
+  if (!response.ok) throw new Error("读取操作记录失败");
+  const data = await response.json();
+  return data.operations;
+}
+
+export async function saveOperationFeedback(id: string, feedback: OperationFeedbackInput): Promise<OperationRecord> {
+  const data = await postJson(`/api/operations/${encodeURIComponent(id)}/feedback`, feedback);
+  return data.operation;
+}
+
+export function formatClock(minutes: number) {
+  const m = ((minutes % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+export function formatTick(tick: number) {
+  return `T+${tick} min`;
+}
