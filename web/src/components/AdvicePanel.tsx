@@ -132,9 +132,9 @@ function AdviceBubble({ advice, tick, onAction }: { advice: any; tick: number; o
         {advice.action && (
           <div className="flex items-center justify-center gap-3 rounded-md bg-primary/5 px-3 py-2">
             <span className="text-xs text-muted-foreground">DO 目标值</span>
-            <span className="font-mono text-lg font-bold">{advice.action.from.toFixed(1)}</span>
+            <span className="text-lg font-bold tabular-nums">{advice.action.from.toFixed(1)}</span>
             <ArrowRight className="size-4 text-primary" />
-            <span className="font-mono text-lg font-bold text-primary">{advice.action.to.toFixed(1)}</span>
+            <span className="text-lg font-bold text-primary tabular-nums">{advice.action.to.toFixed(1)}</span>
             <span className="text-xs text-muted-foreground">mg/L</span>
           </div>
         )}
@@ -200,7 +200,7 @@ function AdviceBubble({ advice, tick, onAction }: { advice: any; tick: number; o
             <AlertDialogTitle>确认手动执行该调节？</AlertDialogTitle>
             <AlertDialogDescription>
               {advice.action && (
-                <span className="mt-1 block font-mono text-sm font-semibold text-primary">
+                <span className="mt-1 block text-sm font-semibold text-primary tabular-nums">
                   DO 目标值 {advice.action.from.toFixed(1)} → {advice.action.to.toFixed(1)} mg/L
                 </span>
               )}

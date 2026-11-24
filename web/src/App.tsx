@@ -146,7 +146,7 @@ export default function App() {
                     <TrendChart
                       title="好氧区 DO（测量值）"
                       unit="mg/L"
-                      color="var(--primary)"
+                      color="var(--chart-do)"
                       points={history.map((h: any) => h.measuredDo)}
                       current={state.measured.do === null ? "—" : state.measured.do.toFixed(2)}
                       reference={{ value: state.bio.doSetpoint, label: "目标" }}
@@ -155,7 +155,7 @@ export default function App() {
                     <TrendChart
                       title="曝气风量（反馈）"
                       unit="m³/h"
-                      color="var(--success)"
+                      color="var(--chart-airflow)"
                       points={history.map((h: any) => h.measuredAirflow ?? h.airflow)}
                       current={(state.measured.airflow ?? state.bio.airflow).toFixed(0)}
                       clockMinutes={clockMinutes}
@@ -163,7 +163,7 @@ export default function App() {
                     <TrendChart
                       title="出水氨氮"
                       unit="mg/L"
-                      color="var(--warning)"
+                      color="var(--chart-nh4)"
                       points={history.map((h: any) => h.effNh4)}
                       current={state.effluent.nh4.toFixed(2)}
                       reference={{ value: data.limits.nh4InternalLimit, label: "内控" }}
@@ -172,7 +172,7 @@ export default function App() {
                     <TrendChart
                       title="风机功率"
                       unit="kW"
-                      color="#d6e3ff"
+                      color="var(--chart-power)"
                       points={history.map((h: any) => h.power)}
                       current={state.blower.power.toFixed(1)}
                       clockMinutes={clockMinutes}

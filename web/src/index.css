@@ -1,6 +1,15 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Noto Sans SC";
+  src: url("/fonts/noto-sans-sc.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 @theme inline {
+  --font-sans: var(--font-ui);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -28,36 +37,44 @@
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  --font-ui: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   --radius: 0.625rem;
-  --background: #111414;
-  --foreground: #f7f8f8;
-  --card: #1c2226;
-  --card-foreground: #f7f8f8;
-  --primary: #8fb0ef;
-  --primary-foreground: #121823;
-  --secondary: #27334a;
-  --secondary-foreground: #d6e3ff;
-  --muted: #181d20;
-  --muted-foreground: #aab8d5;
-  --accent: #293542;
-  --accent-foreground: #f7f8f8;
-  --destructive: #a63847;
-  --popover: #222a31;
-  --popover-foreground: #f7f8f8;
-  --border: #36434d;
-  --input: #536571;
-  --ring: #8fb0ef;
-  --success: #88d8b4;
-  --warning: #f7c180;
-  --critical: #ff9da6;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #1e293b;
+  --primary: #334155;
+  --primary-foreground: #ffffff;
+  --secondary: #e9eef4;
+  --secondary-foreground: #1e293b;
+  --muted: #f1f5f9;
+  --muted-foreground: #475569;
+  --accent: #e7edf4;
+  --accent-foreground: #172337;
+  --destructive: #a32f41;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --border: #dae2ec;
+  --input: #8996a9;
+  --ring: #4a6593;
+  --success: #146047;
+  --warning: #854807;
+  --critical: #a5263d;
+  --chart-do: #365d9a;
+  --chart-airflow: #12695e;
+  --chart-nh4: #925009;
+  --chart-power: #526177;
+  --shadow-surface: 0 1px 2px rgb(15 23 42 / 4%), 0 8px 24px -16px rgb(15 23 42 / 18%);
   --motion-fast: 180ms;
   --motion-panel: 320ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-* {
-  border-color: var(--border);
+@layer base {
+  *, ::before, ::after {
+    border-color: var(--border);
+  }
 }
 
 /* 可点击元素统一指针光标 */
@@ -73,7 +90,7 @@ a {
 /* 自定义滚动条（Webkit / Firefox），禁用浏览器原生样式 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #526174 transparent;
+  scrollbar-color: #a7b3c3 transparent;
 }
 
 *::-webkit-scrollbar {
@@ -86,12 +103,12 @@ a {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #526174;
+  background: #a7b3c3;
   border-radius: 9999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #7789a3;
+  background: #7d8ba0;
 }
 
 *::-webkit-scrollbar-button {
@@ -104,27 +121,35 @@ body,
   height: 100%;
 }
 
+html {
+  font-family: var(--font-ui);
+}
+
 body {
   overflow: hidden;
   background: var(--background);
   color: var(--foreground);
-  font-family: "Geist", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+button, input, select, textarea, ::file-selector-button {
+  font-family: inherit;
 }
 
 .app-canvas {
   background:
-    radial-gradient(ellipse at 82% 4%, rgb(113 145 208 / 15%), transparent 38%),
-    radial-gradient(ellipse at 12% 100%, rgb(170 184 213 / 8%), transparent 33%),
-    linear-gradient(180deg, #111414, #171a1a);
+    radial-gradient(ellipse at 84% 0%, rgb(207 220 237 / 45%), transparent 54%),
+    var(--background);
 }
 
 .app-header {
-  background: rgb(19 24 27 / 94%);
-  box-shadow: 0 1px 0 rgb(214 227 255 / 5%);
+  background: rgb(255 255 255 / 77%);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-surface);
 }
 
 .control-panel {
-  background: linear-gradient(110deg, #1b2329, #181e22);
+  background: rgb(248 250 252 / 80%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 86%);
 }
 
 .monitor-layout {
@@ -160,9 +185,8 @@ body {
 
 .stage-card {
   --stage-status: var(--success);
-  background: linear-gradient(150deg, #222a30, var(--card) 62%);
-  border-color: color-mix(in srgb, var(--stage-status) 15%, var(--border));
-  box-shadow: inset 0 1px 0 rgb(214 227 255 / 6%), 0 9px 22px rgb(0 0 0 / 14%);
+  background: var(--card);
+  box-shadow: var(--shadow-surface);
   transition: border-color var(--motion-panel) var(--motion-ease), box-shadow var(--motion-panel) var(--motion-ease),
     translate var(--motion-panel) var(--motion-ease);
 }
@@ -171,12 +195,16 @@ body {
 :is(.stage-card, .stage-status)[data-status="danger"] { --stage-status: var(--critical); }
 
 .stage-card[data-featured="true"] {
-  background: linear-gradient(155deg, #293647, #1d252d 66%);
+  background: linear-gradient(155deg, #edf2f8, var(--card) 72%);
+}
+
+.stage-card:is([data-status="warning"], [data-status="danger"]) {
+  border-color: color-mix(in srgb, var(--stage-status) 24%, var(--border));
 }
 
 .stage-card:is(:hover, :focus-within) {
-  border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
-  box-shadow: inset 0 1px 0 rgb(214 227 255 / 11%), 0 12px 32px rgb(0 0 0 / 25%);
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  box-shadow: 0 8px 22px -12px rgb(15 23 42 / 26%);
   translate: 0 -2px;
 }
 
@@ -197,10 +225,10 @@ body {
 }
 
 .chart-grid {
-  background-color: var(--muted);
+  background-color: var(--background);
   background-image:
-    linear-gradient(rgb(170 184 213 / 9%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(170 184 213 / 9%) 1px, transparent 1px);
+    linear-gradient(rgb(100 116 139 / 12%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(100 116 139 / 12%) 1px, transparent 1px);
   background-size: 100% 25%, 12.5% 100%;
 }
 
@@ -239,8 +267,8 @@ nav a[aria-current="page"], [data-slot="tabs-trigger"][data-state="active"] {
 .stage-enter { animation-delay: calc(var(--stage-order, 0) * 32ms); }
 
 [data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"] {
-  background: rgb(5 8 10 / 76%);
-  backdrop-filter: blur(3px);
+  background: rgb(30 41 59 / 32%);
+  backdrop-filter: blur(4px);
 }
 
 :is([data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"])[data-state="open"] { animation: overlay-in 200ms ease both; }

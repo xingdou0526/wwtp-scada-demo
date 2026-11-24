@@ -155,7 +155,7 @@ export function ProcessFlow({ state, limits, history, children }: { state: any; 
         ["曝气风量", bio.airflow.toFixed(0), "m³/h"], ["MLSS", bio.mlss.toFixed(0), "mg/L"],
         ["需氧量", bio.our.toFixed(0), "kgO₂/h"],
       ],
-      trend: { key: "measuredDo", color: "var(--primary)", reference: { value: bio.doSetpoint, label: "DO 目标" } },
+      trend: { key: "measuredDo", color: "var(--chart-do)", reference: { value: bio.doSetpoint, label: "DO 目标" } },
     },
     {
       id: "membrane", title: "MBR 膜池", icon: Layers, description: "监测跨膜压差与膜通量，观察膜产水状态。",
@@ -171,7 +171,7 @@ export function ProcessFlow({ state, limits, history, children }: { state: any; 
         ["出水 COD", effluent.cod.toFixed(1), "mg/L"], ["总氮", effluent.tn.toFixed(1), "mg/L"],
         ["总磷", effluent.tp.toFixed(2), "mg/L"],
       ],
-      trend: { key: "effNh4", color: "var(--warning)", reference: { value: limits.nh4InternalLimit, label: "氨氮内控" } },
+      trend: { key: "effNh4", color: "var(--chart-nh4)", reference: { value: limits.nh4InternalLimit, label: "氨氮内控" } },
     },
   ];
 
@@ -185,7 +185,7 @@ export function ProcessFlow({ state, limits, history, children }: { state: any; 
         ["瞬时功率", blower.power.toFixed(1), "kW"], ["累计电耗", blower.energyKwh.toFixed(1), "kWh"],
         ["出口压力", blower.pressure.toFixed(1), "kPa"], ["电机电流", blower.current.toFixed(0), "A"],
       ],
-      trend: { key: "measuredAirflow", color: "var(--success)" },
+      trend: { key: "measuredAirflow", color: "var(--chart-airflow)" },
     },
     {
       id: "chemicals", title: "加药间", icon: FlaskConical, description: "查看加药系统的预设模拟数据及储罐状态。",
