@@ -9,22 +9,22 @@ import {
   Wrench,
   Gauge,
   ShieldCheck,
-  History,
   ChevronDown,
   CircleCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { AdviceHistoryButton } from "@/components/AdviceHistory";
 import { ExplainText, TermProvider } from "@/components/Term";
 import { KnowledgeReference } from "@/components/KnowledgeReference";
 import { OperationRecords } from "@/components/OperationRecords";
 import { postJson } from "@/lib/api";
-import { DO_ADJUSTMENT, type DoAdjustmentAdvice } from "@/lib/advice";
+import { DO_ADJUSTMENT, type ActiveAdvice, type DoAdjustmentAdvice } from "@/lib/advice";
 import type { Term } from "@/lib/terms";
 import { cn } from "@/lib/utils";
 
 const TYPE_META: Record<string, { label: string; icon: any; className: string }> = {
-  adjust: { label: "调节建议", icon: Gauge, className: "text-primary" },
+  adjust: { label: "调节建议", icon: Gauge, className: "text-critical" },
   inspect: { label: "排查建议", icon: Wrench, className: "text-warning" },
   observe: { label: "观察提示", icon: Eye, className: "text-muted-foreground" },
 };
@@ -35,18 +35,11 @@ const PRIORITY_META: Record<string, { label: string; variant: "destructive" | "d
   low: { label: "低优先级", variant: "secondary" },
 };
 
-const STATUS_META: Record<string, { label: string; className: string }> = {
-  executed: { label: "已执行", className: "text-success" },
-  ignored: { label: "已忽略", className: "text-muted-foreground" },
-  expired: { label: "已过期", className: "text-muted-foreground" },
-  pending: { label: "待处理", className: "text-primary" },
-};
-
 function Section({ title, icon, children }: { title: string; icon: any; children: any }) {
   const Icon = icon;
   return (
     <section className="flex flex-col gap-1.5">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-muted-foreground">
+      <h4 className="flex items-center gap-1 text-sm font-semibold text-muted-foreground">
         <Icon className="size-3.5" /> {title}
       </h4>
       {children}
@@ -63,10 +56,10 @@ function AiAvatar() {
   );
 }
 
-function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
-  advice: any;
+function AdviceCard({ advice, doAdjustment, main, onAction }: {
+  advice: ActiveAdvice;
   doAdjustment: DoAdjustmentAdvice | null;
-  remainingSeconds: number;
+  main: boolean;
   onAction: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -75,15 +68,15 @@ function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
   const typeMeta = TYPE_META[advice.type] ?? TYPE_META.observe;
   const TypeIcon = typeMeta.icon;
   const priority = PRIORITY_META[advice.priority] ?? PRIORITY_META.low;
-  const minutes = Math.floor(remainingSeconds / 60);
-  const seconds = remainingSeconds % 60;
+  const minutes = Math.floor(advice.remainingSeconds / 60);
+  const seconds = advice.remainingSeconds % 60;
   const remaining = minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
 
   async function handleIgnore() {
     setBusy(true);
     setError(null);
     try {
-      await postJson(`/api/advice/${advice.id}/ignore`);
+      await postJson(`/api/advice/${encodeURIComponent(advice.id)}/ignore`);
       onAction();
     } catch (cause) {
       setError((cause as Error).message);
@@ -93,52 +86,59 @@ function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
   }
 
   return (
-    <article className="advice-enter flex gap-2">
-      <AiAvatar />
-      <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-xl rounded-tl-sm border bg-card p-3 shadow-sm">
+    <article className={main ? "advice-enter flex gap-2" : "px-2.5 pt-1 pb-2.5"}>
+      {main && <AiAvatar />}
+      <div className={cn("flex min-w-0 flex-1 flex-col gap-3", main && "rounded-xl rounded-tl-sm border bg-card p-3 shadow-sm")}>
         <header className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className={cn("flex items-center gap-1 text-xs font-semibold", typeMeta.className)}>
-              <TypeIcon className="size-4" /> {typeMeta.label}
-            </span>
-            <Badge variant={priority.variant}>{priority.label}</Badge>
-          </div>
-          <h3 className="text-sm font-bold leading-snug">{advice.title}</h3>
-          <p className="text-[11px] text-muted-foreground tabular-nums">{advice.id} · 现实时间剩余约 {remaining}</p>
+          {main && (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <span className={cn("flex items-center gap-1 text-sm font-semibold", typeMeta.className)}>
+                  <TypeIcon className="size-4" /> {typeMeta.label}
+                </span>
+                <Badge variant={priority.variant}>{priority.label}</Badge>
+              </div>
+              <h3 className="text-lg font-bold leading-snug text-critical">{advice.title}</h3>
+            </>
+          )}
+          <p className="text-xs text-muted-foreground tabular-nums">{advice.id} · 现实时间剩余约 {remaining}</p>
         </header>
 
         {advice.action && (
-          <div className="flex items-center justify-center gap-3 rounded-md bg-primary/5 px-3 py-2">
-            <span className="text-xs text-muted-foreground">DO 目标值</span>
-            <span className="text-lg font-bold tabular-nums">{advice.action.from.toFixed(1)}</span>
-            <ArrowRight className="size-4 text-primary" />
-            <span className="text-lg font-bold text-primary tabular-nums">{advice.action.to.toFixed(1)}</span>
-            <span className="text-xs text-muted-foreground">mg/L</span>
+          <div className="flex flex-wrap items-baseline justify-center gap-x-2.5 gap-y-1.5 rounded-lg border border-critical/25 bg-critical/5 px-2.5 py-3 text-critical">
+            <span className="text-sm font-semibold">DO 目标值</span>
+            <div className="inline-flex items-baseline gap-2 whitespace-nowrap tabular-nums">
+              <span className="text-3xl leading-none font-bold">{advice.action.from.toFixed(1)}</span>
+              <ArrowRight aria-hidden className="size-4 shrink-0 self-center" />
+              <span className="sr-only">调至</span>
+              <strong className="text-3xl leading-none font-extrabold">{advice.action.to.toFixed(1)}</strong>
+              <span className="text-sm">mg/L</span>
+            </div>
           </div>
         )}
         {doAdjustment ? (
-          <p className="rounded-md border border-primary/20 bg-primary/5 px-2.5 py-2 text-xs leading-relaxed">
+          <p className="rounded-lg border border-border bg-muted/60 px-3 py-2.5 text-sm leading-relaxed text-foreground">
             请点击主处理流程中的「
             <a
               href={`#${DO_ADJUSTMENT.nodeId}`}
-              className="rounded-sm font-bold text-primary underline underline-offset-2"
+              className="rounded-sm font-bold underline underline-offset-2"
               onClick={(event) => {
                 event.preventDefault();
                 document.getElementById(DO_ADJUSTMENT.nodeId)?.focus();
               }}
             >{DO_ADJUSTMENT.stageName}</a>
-            」卡片上的「{DO_ADJUSTMENT.buttonLabel}」，核对并确认将{DO_ADJUSTMENT.label}调至 <strong className="whitespace-nowrap tabular-nums">{doAdjustment.to.toFixed(1)} mg/L</strong>。
+            」卡片上的「<strong>{DO_ADJUSTMENT.buttonLabel}</strong>」，核对并确认将{DO_ADJUSTMENT.label}调至 <strong className="whitespace-nowrap tabular-nums">{doAdjustment.to.toFixed(1)} mg/L</strong>。
           </p>
         ) : advice.type === "adjust" && (
-          <p className="text-xs text-warning">
+          <p className="text-sm text-warning">
             {advice.blocked ? "约束未满足，暂不可调节。" : "当前建议暂不可调节，请等待状态更新。"}
           </p>
         )}
 
         <Section title="判断依据" icon={Info}>
           <ul className="flex flex-col gap-1.5">
-            {advice.reasons.map((r: any, i: number) => (
-              <li key={i} className="rounded bg-muted px-2 py-1.5 text-xs">
+            {advice.reasons.map((r, i) => (
+              <li key={i} className="rounded bg-muted px-2 py-1.5 text-sm leading-relaxed">
                 <span className="font-medium">{r.label}：</span>
                 <ExplainText text={r.value} />
               </li>
@@ -147,7 +147,7 @@ function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
         </Section>
 
         <Section title="预计效果" icon={CheckCircle2}>
-          <div className="flex flex-col gap-1 text-xs leading-relaxed">
+          <div className="flex flex-col gap-1 text-sm leading-relaxed">
             {advice.forecast.doRange && <p><ExplainText text={`DO 预计区间：${advice.forecast.doRange}（${advice.forecast.responseMinutes}）`} /></p>}
             {advice.forecast.nh4Trend && <p><ExplainText text={`氨氮趋势：${advice.forecast.nh4Trend}`} /></p>}
             {advice.forecast.energyDeltaPct && <p><ExplainText text={`能耗变化：${advice.forecast.energyDeltaPct}`} /></p>}
@@ -156,19 +156,16 @@ function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
         </Section>
 
         <Section title="约束检查" icon={ShieldCheck}>
-          <ul className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+          <ul className="list-disc space-y-0.5 pl-4 text-sm leading-relaxed text-muted-foreground">
             {advice.constraints.map((c: string, i: number) => (
-              <li key={i} className="flex gap-1.5">
-                <span aria-hidden>·</span>
-                <ExplainText text={c} />
-              </li>
+              <li key={i}><ExplainText text={c} /></li>
             ))}
           </ul>
         </Section>
 
         {advice.risks.length > 0 && (
           <Section title="风险提示" icon={AlertTriangle}>
-            <ul className="flex flex-col gap-0.5 text-[11px] text-warning">
+            <ul className="flex flex-col gap-0.5 text-sm leading-relaxed text-warning">
               {advice.risks.map((r: string, i: number) => (
                 <li key={i}><ExplainText text={r} /></li>
               ))}
@@ -188,16 +185,14 @@ function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
   );
 }
 
-export function AdvicePanel({ activeAdvice, doAdjustment, advices, remainingSeconds, onAction, terms }: {
-  activeAdvice: any;
+export function AdvicePanel({ activeAdvices, doAdjustment, onAction, terms }: {
+  activeAdvices: ActiveAdvice[];
   doAdjustment: DoAdjustmentAdvice | null;
-  advices: any[];
-  remainingSeconds: number;
   onAction: () => void;
   terms: Term[];
 }) {
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const history = advices.filter((a) => a.status !== "pending").slice(0, 10);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [mainAdvice, ...otherAdvices] = activeAdvices;
 
   return (
     <aside
@@ -220,67 +215,76 @@ export function AdvicePanel({ activeAdvice, doAdjustment, advices, remainingSeco
         </span>
       </header>
 
-      {/* 历史建议（顶部折叠） */}
-      <div className="border-b bg-card">
-        <div className="flex items-center gap-1 px-2 py-1">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="min-w-0 flex-1 justify-start gap-2 px-2 text-xs text-muted-foreground"
-            onClick={() => setHistoryOpen((v) => !v)}
-            aria-expanded={historyOpen}
-            aria-controls="advice-history"
-          >
-            <History className="size-3.5" />
-            历史建议
-            <Badge variant="secondary" className="text-[10px]">{history.length}</Badge>
-            <ChevronDown className={cn("ml-auto size-3.5 transition-transform", historyOpen && "rotate-180")} />
-          </Button>
+      <TermProvider terms={terms}>
+        <div className="flex items-center justify-between gap-1 border-b bg-card px-2 py-1">
+          <AdviceHistoryButton />
           <OperationRecords />
         </div>
-        <div id="advice-history" className="disclosure-grid" data-open={historyOpen} aria-hidden={!historyOpen} inert={!historyOpen}>
-          <div className="min-h-0 overflow-hidden">
-            <ul className="flex max-h-52 flex-col gap-1.5 overflow-y-auto px-4 pb-3">
-            {history.length === 0 ? (
-              <li className="text-xs text-muted-foreground">暂无历史建议</li>
-            ) : (
-              history.map((a) => (
-                <li key={a.id} className="flex items-start justify-between gap-2 rounded bg-muted px-2 py-1.5 text-xs">
-                  <span className="flex-1 leading-snug">
-                    <span className="mr-1 text-muted-foreground">{a.id}</span>
-                    {a.title}
-                  </span>
-                  <span className={cn("shrink-0 font-medium", STATUS_META[a.status]?.className)}>
-                    {a.invalidatedBy === "limits" ? "规则已更新" : a.invalidatedBy === "conditions" ? "工况已变化" : STATUS_META[a.status]?.label}
-                  </span>
-                </li>
-              ))
-            )}
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      {/* 对话消息区 */}
-      <div className="flex min-h-[280px] flex-1 flex-col gap-3 overflow-y-auto p-3 lg:min-h-0">
-        {activeAdvice ? (
-          <TermProvider terms={terms}>
-            <AdviceBubble key={activeAdvice.id} advice={activeAdvice} doAdjustment={doAdjustment} remainingSeconds={remainingSeconds} onAction={onAction} />
-          </TermProvider>
-        ) : (
-          <article className="flex gap-2">
-            <AiAvatar />
-            <div className="flex flex-1 flex-col gap-1.5 rounded-xl rounded-tl-sm border border-success/30 bg-card p-3 shadow-sm">
-              <p className="flex items-center gap-1.5 text-sm font-medium text-success">
-                <CircleCheck className="size-4" /> 暂无待处理建议
-              </p>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                我会持续监测 DO、进水负荷与出水氨氮。出现异常时，将在此给出调节建议、判断依据和预计效果。
-              </p>
+        <div className="flex min-h-[280px] flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
+          {mainAdvice ? (
+            <div role="region" aria-label="主建议" className="min-h-0 flex-1 p-3 lg:overflow-y-auto">
+              <AdviceCard
+                key={mainAdvice.id}
+                advice={mainAdvice}
+                main
+                doAdjustment={doAdjustment?.id === mainAdvice.id ? doAdjustment : null}
+                onAction={onAction}
+              />
             </div>
-          </article>
-        )}
-      </div>
+          ) : (
+            <article className="flex flex-1 items-start gap-2 p-3">
+              <AiAvatar />
+              <div className="flex flex-1 flex-col gap-1.5 rounded-xl rounded-tl-sm border border-success/30 bg-card p-3 shadow-sm">
+                <p className="flex items-center gap-1.5 text-sm font-medium text-success">
+                  <CircleCheck className="size-4" /> 暂无待处理建议
+                </p>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  我会持续监测 DO、进水负荷与出水氨氮。出现异常时，将在此给出调节建议、判断依据和预计效果。
+                </p>
+              </div>
+            </article>
+          )}
+          {otherAdvices.length > 0 && (
+            <section aria-labelledby="other-advice-title" className="shrink-0 space-y-2 border-t bg-card p-3 lg:max-h-[44%] lg:overflow-y-auto">
+              <h3 id="other-advice-title" className="text-xs font-semibold text-muted-foreground">其他提醒</h3>
+              <ul className="space-y-1.5">
+                {otherAdvices.map((advice) => {
+                  const expanded = expandedId === advice.id;
+                  const priority = PRIORITY_META[advice.priority] ?? PRIORITY_META.low;
+                  const detailsId = `additional-advice-${advice.id}`;
+                  return (
+                    <li key={advice.id} className="rounded-lg border bg-background">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto min-h-9 w-full justify-start gap-2 px-2.5 py-2 text-left whitespace-normal"
+                        aria-expanded={expanded}
+                        aria-controls={detailsId}
+                        onClick={() => setExpandedId((current) => current === advice.id ? null : advice.id)}
+                      >
+                        <span className="min-w-0 flex-1 font-semibold leading-snug">{advice.title}</span>
+                        <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
+                        <ChevronDown aria-hidden className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")} />
+                      </Button>
+                      <div id={detailsId} className="disclosure-grid" data-open={expanded} aria-hidden={!expanded} inert={!expanded}>
+                        <div className="min-h-0 overflow-hidden">
+                          <AdviceCard
+                            advice={advice}
+                            main={false}
+                            doAdjustment={doAdjustment?.id === advice.id ? doAdjustment : null}
+                            onAction={onAction}
+                          />
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+        </div>
+      </TermProvider>
 
       {/* 底部声明 */}
       <footer className="flex items-center justify-center gap-1.5 border-t bg-card px-3 py-2 text-center text-xs font-bold text-critical">

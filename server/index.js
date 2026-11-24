@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { createSimulation } from "./simulator.js";
 import { createAdvisor, operationReviewStatus } from "./advisor.js";
+import { AdviceStorageError, openAdviceStore } from "./advice-store.js";
 import { openOperationStore, OperationStorageError } from "./operation-store.js";
 import { ManagementError, openManagementStore } from "./management-store.js";
 import { managementRoutes } from "./management-routes.js";
@@ -9,7 +10,7 @@ import { managementRoutes } from "./management-routes.js";
 const app = express();
 const management = openManagementStore();
 const sim = createSimulation(management.data.limits);
-const advisor = createAdvisor(sim, openOperationStore());
+const advisor = createAdvisor(sim, { ...openOperationStore(), ...openAdviceStore() });
 advisor.interruptReviews("restart");
 
 app.use("/api/admin", managementRoutes(management, sim, advisor));
@@ -27,12 +28,8 @@ const measuredHistory = []; // 测量值（含数据质量异常）
 const MAX_HISTORY = 240;
 const REVIEW_TICK_SECONDS = 10;
 
-function getActiveAdvice() {
-  return advisor.advices.find((advice) => advice.status === "pending") ?? null;
-}
-
-function secondsPerTick(advice) {
-  return advice?.type === "adjust" && advice.action && !advice.blocked ? REVIEW_TICK_SECONDS : 1;
+function secondsPerTick(advices) {
+  return advices.some((advice) => advice.type === "adjust" && advice.action && !advice.blocked) ? REVIEW_TICK_SECONDS : 1;
 }
 
 function pushHistory() {
@@ -54,12 +51,17 @@ let secondsIntoTick = 0;
 let stepRequested = false;
 setInterval(() => {
   secondsIntoTick += 1;
-  if (!stepRequested && secondsIntoTick < secondsPerTick(getActiveAdvice())) return;
+  if (!stepRequested && secondsIntoTick < secondsPerTick(advisor.activeAdvices)) return;
   secondsIntoTick = 0;
   stepRequested = false;
   sim.tick();
   pushHistory();
-  advisor.evaluate(history, measuredHistory);
+  try {
+    advisor.evaluate(history, measuredHistory);
+  } catch (error) {
+    if (!(error instanceof AdviceStorageError)) throw error;
+    console.error("[server] 保存建议状态失败，下个 tick 重试", error.cause);
+  }
   try {
     advisor.reviewOperations();
   } catch (error) {
@@ -73,23 +75,32 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/api/state", (req, res) => {
-  const activeAdvice = getActiveAdvice();
-  const tickSeconds = secondsPerTick(activeAdvice);
-  const remainingTicks = activeAdvice ? Math.max(0, activeAdvice.expiresAtTick - sim.state.tick) : 0;
+  const pending = advisor.activeAdvices;
+  const tickSeconds = secondsPerTick(pending);
   const untilNextTick = stepRequested ? 1 : tickSeconds - secondsIntoTick;
+  const activeAdvices = pending.map((advice) => ({
+    ...advice,
+    remainingSeconds: (advice.expiresAtTick - sim.state.tick - 1) * tickSeconds + Math.max(1, untilNextTick),
+  }));
+  const activeAdvice = activeAdvices[0] ?? null;
   res.json({
     state: sim.state,
     limits: sim.LIMITS,
     terms: management.data.terms,
     history,
     activeAdvice,
+    activeAdvices,
     timing: {
       secondsPerTick: tickSeconds,
-      adviceRemainingSeconds: remainingTicks > 0 ? (remainingTicks - 1) * tickSeconds + Math.max(1, untilNextTick) : 0,
+      adviceRemainingSeconds: activeAdvice?.remainingSeconds ?? 0,
     },
     advices: advisor.advices.slice(0, 20),
     operations: advisor.operations.slice(0, 20),
   });
+});
+
+app.get("/api/advice/history", (_req, res) => {
+  res.json({ advices: advisor.adviceHistory });
 });
 
 app.post("/api/scenario", (req, res) => {
@@ -136,11 +147,12 @@ app.post("/api/operations/:id/feedback", (req, res) => {
 });
 
 app.post("/api/reset", (req, res) => {
-  advisor.interruptReviews("reset");
+  advisor.resetSession();
   sim.reset();
   history.length = 0;
   measuredHistory.length = 0;
-  advisor.advices.length = 0;
+  secondsIntoTick = 0;
+  stepRequested = false;
   for (let i = 0; i < 60; i++) {
     sim.tick();
     pushHistory();
@@ -155,6 +167,10 @@ app.use((error, _req, res, next) => {
   }
   if (error.type === "entity.too.large") return res.status(413).json({ error: "提交的内容过大" });
   if (error.type === "entity.parse.failed") return res.status(400).json({ error: "请求数据格式无效" });
+  if (error instanceof AdviceStorageError) {
+    console.error("[server] 保存历史建议失败", error.cause);
+    return res.status(503).json({ ok: false, error: error.message });
+  }
   if (!(error instanceof OperationStorageError)) return next(error);
   console.error("[server] 保存操作记录失败", error.cause);
   res.status(503).json({ ok: false, error: error.message });

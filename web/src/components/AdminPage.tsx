@@ -1,5 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
-import { BookOpen, ClipboardList, LibraryBig, Plus, Save, Settings2, Trash2 } from "lucide-react";
+import { BookOpen, ClipboardList, History, LibraryBig, Plus, Save, Settings2, Trash2 } from "lucide-react";
+import { AdviceHistoryLog } from "@/components/AdviceHistory";
+import { TermProvider } from "@/components/Term";
 import { OperationLog } from "@/components/OperationRecords";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -43,13 +45,14 @@ export function AdminPage({ setpoint, onChange }: { setpoint?: number; onChange:
     <section aria-labelledby="admin-title" className="page-enter flex min-h-0 flex-1 flex-col gap-4">
       <header className="shrink-0">
         <h2 id="admin-title" className="text-xl font-semibold tracking-tight">后台管理</h2>
-        <p className="mt-1 text-sm text-muted-foreground">维护建议引用、术语解释和仿真规则，查询已执行的操作。</p>
+        <p className="mt-1 text-sm text-muted-foreground">维护建议引用、术语解释和仿真规则，查询历史建议与操作记录。</p>
       </header>
       <Tabs defaultValue="knowledge" className="min-h-0 flex-1 gap-3">
         <TabsList aria-label="后台管理模块" className="grid w-full shrink-0 grid-cols-2 gap-1 sm:inline-flex sm:w-fit">
           <TabsTrigger value="knowledge" className="gap-2"><BookOpen aria-hidden className="size-4" /> 知识库</TabsTrigger>
           <TabsTrigger value="terms" className="gap-2"><LibraryBig aria-hidden className="size-4" /> 术语库</TabsTrigger>
           <TabsTrigger value="limits" className="gap-2"><Settings2 aria-hidden className="size-4" /> 规则参数</TabsTrigger>
+          <TabsTrigger value="advice-history" className="gap-2"><History aria-hidden className="size-4" /> 历史建议</TabsTrigger>
           <TabsTrigger value="operations" className="gap-2"><ClipboardList aria-hidden className="size-4" /> 操作记录</TabsTrigger>
         </TabsList>
         <TabsContent value="knowledge" className={paneClass}>
@@ -88,6 +91,9 @@ export function AdminPage({ setpoint, onChange }: { setpoint?: number; onChange:
               onChange();
             }} />
           ) : unavailable}
+        </TabsContent>
+        <TabsContent value="advice-history" className={paneClass}>
+          <TermProvider terms={data?.terms ?? []}><AdviceHistoryLog /></TermProvider>
         </TabsContent>
         <TabsContent value="operations" className={paneClass}>
           <OperationLog />

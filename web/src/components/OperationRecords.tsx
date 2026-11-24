@@ -47,12 +47,15 @@ function ReviewBadge({ operation }: { operation: OperationRecord }) {
   );
 }
 
-export function OperationRecords() {
+export function OperationRecords({ operationId }: { operationId?: string }) {
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="w-27 shrink-0 text-xs text-muted-foreground">
-          <ClipboardList aria-hidden /> 操作记录
+        <Button
+          variant={operationId ? "outline" : "ghost"} size="sm"
+          className={operationId ? undefined : "w-27 shrink-0 text-xs text-muted-foreground"}
+        >
+          <ClipboardList aria-hidden /> {operationId ? "查看关联操作记录" : "操作记录"}
         </Button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
@@ -60,7 +63,7 @@ export function OperationRecords() {
           <DialogTitle>操作记录</DialogTitle>
           <DialogDescription>查看已执行建议的调节依据、复评结果和人工反馈。</DialogDescription>
         </DialogHeader>
-        <OperationLog />
+        <OperationLog operationId={operationId} />
       </DialogContent>
     </Dialog>
   );
@@ -73,11 +76,11 @@ function matchesOperation(operation: OperationRecord, status: string, query: str
     .some((value) => value?.toLowerCase().includes(keyword));
 }
 
-export function OperationLog() {
+export function OperationLog({ operationId }: { operationId?: string }) {
   const [records, setRecords] = useState<OperationRecord[] | null>(null);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>();
+  const [selectedId, setSelectedId] = useState<string | null>(operationId);
   const [loadError, setLoadError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -110,7 +113,7 @@ export function OperationLog() {
   }, [refreshKey]);
 
   const visibleRecords = records?.filter((operation) => matchesOperation(operation, filter, query)) ?? [];
-  const selected = records?.find((operation) => operation.id === selectedId) ?? visibleRecords[0];
+  const selected = records?.find((operation) => operation.id === selectedId) ?? (operationId ? undefined : visibleRecords[0]);
 
   function handleFilters(nextStatus: string, nextQuery: string) {
     setFilter(nextStatus);
@@ -175,6 +178,9 @@ export function OperationLog() {
             <div className="min-h-0 md:overflow-y-auto">
             <div key={selected.id} className="advice-enter"><OperationDetail operation={selected} onSaved={handleSaved} /></div>
             </div>
+          )}
+          {!selected && operationId && selectedId === operationId && (
+            <p className="p-4 text-sm text-muted-foreground">找不到关联操作记录，请选择其他记录。</p>
           )}
         </div>
       )}
@@ -296,9 +302,9 @@ function FeedbackForm({ operation, onSaved }: { operation: OperationRecord; onSa
           <Textarea id="operation-evaluation" rows={3} maxLength={1000} disabled={saving} value={evaluation} onChange={(event) => setEvaluation(event.target.value)} />
         </div>
       </div>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-32 space-y-1.5">
-          <Label htmlFor="operation-effective">建议有效性</Label>
+      <div className="space-y-1.5">
+        <Label htmlFor="operation-effective" className="block">建议有效性</Label>
+        <div className="grid grid-cols-[minmax(0,8rem)_minmax(0,7rem)] items-stretch gap-3">
           <Select value={effectiveness} disabled={saving} onValueChange={(value) => { setEffectiveness(value); setMessage(""); }}>
             <SelectTrigger id="operation-effective"><SelectValue /></SelectTrigger>
             <SelectContent position="item-aligned">
@@ -307,10 +313,10 @@ function FeedbackForm({ operation, onSaved }: { operation: OperationRecord; onSa
               <SelectItem value="false">无效</SelectItem>
             </SelectContent>
           </Select>
+          <Button type="submit" disabled={saving}><Save aria-hidden />{saving ? "保存中…" : "保存反馈"}</Button>
         </div>
-        <Button type="submit" className="w-28" disabled={saving}><Save aria-hidden />{saving ? "保存中…" : "保存反馈"}</Button>
-        {message && <p role="status" className="text-sm text-success">{message}</p>}
       </div>
+      {message && <p role="status" className="text-sm text-success">{message}</p>}
       {error && <p role="alert" className="text-sm text-critical">{error}</p>}
     </form>
   );

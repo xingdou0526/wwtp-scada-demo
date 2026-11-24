@@ -7,7 +7,7 @@ import { ScenarioBar } from "@/components/ScenarioBar";
 import { ProcessFlow } from "@/components/ProcessFlow";
 import { TrendChart } from "@/components/TrendChart";
 import { AdvicePanel } from "@/components/AdvicePanel";
-import type { DoAdjustmentAdvice } from "@/lib/advice";
+import type { ActiveAdvice, DoAdjustmentAdvice } from "@/lib/advice";
 import { fetchState, postJson, formatClock } from "@/lib/api";
 
 export default function App() {
@@ -76,19 +76,22 @@ export default function App() {
   }, [load]);
 
   const state = data?.state;
-  const activeAdvice = data?.activeAdvice;
+  const activeAdvices: ActiveAdvice[] = data?.activeAdvices ?? (data?.activeAdvice ? [{
+    ...data.activeAdvice,
+    remainingSeconds: data.timing?.adviceRemainingSeconds ?? Math.max(0, data.activeAdvice.expiresAtTick - (state?.tick ?? 0)),
+  }] : []);
   const tickSeconds = data?.timing?.secondsPerTick ?? 1;
-  const doAdjustment: DoAdjustmentAdvice | null =
-    connected && state && activeAdvice?.type === "adjust" && activeAdvice.status === "pending" &&
-    !activeAdvice.blocked && activeAdvice.expiresAtTick > state.tick &&
-    activeAdvice.action?.param === "doSetpoint" && activeAdvice.action.from === state.bio.doSetpoint
-      ? {
-          id: activeAdvice.id,
-          from: activeAdvice.action.from,
-          to: activeAdvice.action.to,
-          reviewMinutes: activeAdvice.reviewAfterTick - activeAdvice.createdTick,
-        }
-      : null;
+  const adjustable = connected && state ? activeAdvices.find((advice) =>
+    advice.type === "adjust" && advice.status === "pending" && !advice.blocked &&
+    advice.expiresAtTick > state.tick && advice.action?.param === "doSetpoint" &&
+    advice.action.from === state.bio.doSetpoint
+  ) : undefined;
+  const doAdjustment: DoAdjustmentAdvice | null = adjustable?.action ? {
+    id: adjustable.id,
+    from: adjustable.action.from,
+    to: adjustable.action.to,
+    reviewMinutes: adjustable.reviewAfterTick - adjustable.createdTick,
+  } : null;
   const history = data?.history ?? [];
   const clockMinutes = history.map((sample: any) => sample.clockMinutes);
 
@@ -198,10 +201,8 @@ export default function App() {
               </ProcessFlow>
             </div>
             <AdvicePanel
-              activeAdvice={activeAdvice}
+              activeAdvices={activeAdvices}
               doAdjustment={doAdjustment}
-              advices={data.advices}
-              remainingSeconds={data.timing?.adviceRemainingSeconds ?? Math.max(0, (activeAdvice?.expiresAtTick ?? state.tick) - state.tick)}
               onAction={load}
               terms={data.terms ?? []}
             />
