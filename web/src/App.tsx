@@ -7,6 +7,7 @@ import { ScenarioBar } from "@/components/ScenarioBar";
 import { ProcessFlow } from "@/components/ProcessFlow";
 import { TrendChart } from "@/components/TrendChart";
 import { AdvicePanel } from "@/components/AdvicePanel";
+import type { DoAdjustmentAdvice } from "@/lib/advice";
 import { fetchState, postJson, formatClock } from "@/lib/api";
 
 export default function App() {
@@ -75,6 +76,19 @@ export default function App() {
   }, [load]);
 
   const state = data?.state;
+  const activeAdvice = data?.activeAdvice;
+  const tickSeconds = data?.timing?.secondsPerTick ?? 1;
+  const doAdjustment: DoAdjustmentAdvice | null =
+    connected && state && activeAdvice?.type === "adjust" && activeAdvice.status === "pending" &&
+    !activeAdvice.blocked && activeAdvice.expiresAtTick > state.tick &&
+    activeAdvice.action?.param === "doSetpoint" && activeAdvice.action.from === state.bio.doSetpoint
+      ? {
+          id: activeAdvice.id,
+          from: activeAdvice.action.from,
+          to: activeAdvice.action.to,
+          reviewMinutes: activeAdvice.reviewAfterTick - activeAdvice.createdTick,
+        }
+      : null;
   const history = data?.history ?? [];
   const clockMinutes = history.map((sample: any) => sample.clockMinutes);
 
@@ -88,8 +102,7 @@ export default function App() {
                 <Droplets aria-hidden className="size-5" />
               </span>
               <div>
-                <h1 className="text-base font-semibold leading-tight tracking-tight sm:text-lg">水质净化厂智能中控仿真平台</h1>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">曝气 AI 辅助决策 · 模拟数据</p>
+                <h1 className="text-base font-semibold leading-tight tracking-tight sm:text-lg">水质净化厂智能曝气辅助决策</h1>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
@@ -98,6 +111,9 @@ export default function App() {
                   <Clock3 aria-hidden className="size-3.5 text-primary" />
                   仿真时间 {formatClock(state.clockMinutes)}
                   <span className="text-xs text-muted-foreground">（{state.tick} min）</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground" title={`每 ${tickSeconds} 秒推进 1 仿真分钟`}>
+                    {tickSeconds > 1 && "审阅 "}{60 / tickSeconds}×
+                  </span>
                 </span>
               )}
               <Badge variant="outline" className={connected ? "border-success/30 bg-success/10 text-success" : "border-critical/40 bg-critical/10 text-critical"}>
@@ -139,7 +155,7 @@ export default function App() {
         ) : (
           <div className="page-enter flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto scroll-smooth lg:flex-row lg:overflow-hidden">
             <div className="flex min-w-0 flex-1 flex-col lg:overflow-y-auto lg:pr-2">
-              <ProcessFlow state={state} limits={data.limits} history={history}>
+              <ProcessFlow state={state} limits={data.limits} history={history} adjustment={doAdjustment} onRefresh={load}>
                 <section aria-labelledby="trend-heading" className="space-y-2.5">
                   <h3 id="trend-heading" className="flex items-center gap-2 text-sm font-semibold"><ChartNoAxesCombined aria-hidden className="size-4 text-primary" /> 关键参数趋势</h3>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
@@ -182,9 +198,10 @@ export default function App() {
               </ProcessFlow>
             </div>
             <AdvicePanel
-              activeAdvice={data.activeAdvice}
+              activeAdvice={activeAdvice}
+              doAdjustment={doAdjustment}
               advices={data.advices}
-              tick={state.tick}
+              remainingSeconds={data.timing?.adviceRemainingSeconds ?? Math.max(0, (activeAdvice?.expiresAtTick ?? state.tick) - state.tick)}
               onAction={load}
               terms={data.terms ?? []}
             />

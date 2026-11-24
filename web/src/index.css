@@ -157,30 +157,164 @@ button, input, select, textarea, ::file-selector-button {
   container-type: inline-size;
 }
 
-.process-grid,
 .support-grid {
   display: grid;
   gap: 0.75rem;
 }
 
 @container monitor (min-width: 27rem) {
-  .process-grid,
   .support-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @container monitor (min-width: 41rem) {
-  .process-grid,
   .support-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-@container monitor (min-width: 55rem) {
-  .process-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
+.process-canvas {
+  --process-surface: #f5f7f9;
+  --process-line: #526e87;
+  --process-auxiliary: #667380;
+  --process-node-border: #a7b4c2;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: radial-gradient(circle, #c3ccd5 0.8px, transparent 1px) 0 0 / 20px 20px, var(--process-surface);
+}
+
+.process-canvas:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.process-diagram {
+  display: block;
+  width: 100%;
+  min-width: 56rem;
+  height: auto;
+}
+
+.process-pipe,
+.process-pipe-motion,
+.process-pipe-auxiliary {
+  fill: none;
+}
+
+.process-pipe {
+  stroke: var(--process-line);
+  stroke-width: 4;
+}
+
+.process-pipe-motion {
+  stroke: var(--process-surface);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 8;
+  animation: process-flow 1.2s linear infinite;
+}
+
+@keyframes process-flow {
+  to { stroke-dashoffset: -13; }
+}
+
+.process-pipe-auxiliary {
+  stroke: var(--process-auxiliary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 3;
+}
+
+.process-marker-water { fill: var(--process-line); }
+.process-marker-auxiliary { fill: var(--process-auxiliary); }
+
+.process-pipe-label rect {
+  fill: var(--process-surface);
+  stroke: var(--process-node-border);
+}
+
+.process-pipe-label text {
+  fill: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.process-node {
+  --node-status: #526071;
+  position: relative;
+  display: grid;
+  height: 100%;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 4px;
+  padding: 9px 12px;
+  border: 1px solid var(--process-node-border);
+  border-radius: 7px;
+  background: var(--card);
+  transition: border-color var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+
+.process-node[data-status="warning"] { --node-status: var(--warning); }
+.process-node[data-status="danger"] { --node-status: var(--critical); }
+
+.process-node:is([data-status="warning"], [data-status="danger"]) {
+  border-color: color-mix(in srgb, var(--node-status) 56%, var(--process-node-border));
+}
+
+.process-node:hover,
+.process-node:has(footer button[aria-expanded="true"]),
+.process-node:has(.process-node-trigger[data-state="open"]) {
+  border-color: var(--chart-do);
+  background-color: #f5f8fc;
+}
+
+.process-node-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--node-status);
+  transition: background-color var(--motion-fast) ease;
+}
+
+.process-node-metrics {
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.process-node-status {
+  align-self: center;
+  border: 1px solid color-mix(in srgb, var(--node-status) 28%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--node-status) 8%, white);
+  padding: 0 7px;
+  color: var(--node-status);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  transition: color var(--motion-fast) ease, border-color var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+
+.process-node-trigger {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.process-node-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.process-scroll-hint { display: none; }
+
+@container monitor (width < 56rem) {
+  .process-scroll-hint { display: block; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .process-pipe-motion { animation: none; }
 }
 
 .stage-card {
@@ -193,10 +327,6 @@ button, input, select, textarea, ::file-selector-button {
 
 :is(.stage-card, .stage-status)[data-status="warning"] { --stage-status: var(--warning); }
 :is(.stage-card, .stage-status)[data-status="danger"] { --stage-status: var(--critical); }
-
-.stage-card[data-featured="true"] {
-  background: linear-gradient(155deg, #edf2f8, var(--card) 72%);
-}
 
 .stage-card:is([data-status="warning"], [data-status="danger"]) {
   border-color: color-mix(in srgb, var(--stage-status) 24%, var(--border));
@@ -263,8 +393,6 @@ nav a[aria-current="page"], [data-slot="tabs-trigger"][data-state="active"] {
 .page-enter, .stage-enter, .advice-enter, [data-slot="tabs-content"][data-state="active"] {
   animation: panel-enter var(--motion-panel) var(--motion-ease) both;
 }
-
-.stage-enter { animation-delay: calc(var(--stage-order, 0) * 32ms); }
 
 [data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"] {
   background: rgb(30 41 59 / 32%);

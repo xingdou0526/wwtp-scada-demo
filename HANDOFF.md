@@ -89,7 +89,7 @@ wwtp-scada-demo/
 cd "e:\Mine\Trae Project\wwtp-scada-demo\server"; node index.js
 
 # 前端
-cd "e:\Mine\Trae Project\wwtp-scada-demo\web"; npx vite --host 127.0.0.1 --port 5173
+cd "e:\Mine\Trae Project\wwtp-scada-demo\web"; npm run dev
 ```
 
 依赖已安装完成，无需重新 install。修改 server 代码需重启 node 进程；web 有 HMR。

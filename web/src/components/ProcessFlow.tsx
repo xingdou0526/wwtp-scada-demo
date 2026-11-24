@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   Activity, ArrowDownToDot, ArrowUpRight, Biohazard, Fan, Filter, FlaskConical,
   Layers, Recycle, ShieldCheck, type LucideIcon,
@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { TrendChart } from "@/components/TrendChart";
+import { DoAdjustment } from "@/components/DoAdjustment";
+import { DO_ADJUSTMENT, type DoAdjustmentAdvice } from "@/lib/advice";
 
 type Status = "normal" | "warning" | "danger";
 type Metric = [label: string, value: string, unit?: string];
@@ -17,7 +19,6 @@ interface Stage {
   icon: LucideIcon;
   description: string;
   status?: Status;
-  featured?: boolean;
   note?: string;
   metrics: Metric[];
   trend?: {
@@ -28,6 +29,10 @@ interface Stage {
 }
 
 const STATUS_LABEL: Record<Status, string> = { normal: "正常", warning: "关注", danger: "异常" };
+const NODE = { width: 180, height: 138, left: 20, top: 60, gap: 38 };
+const RETURN_Y = 24;
+const SLUDGE_Y = 224;
+const CANVAS_HEIGHT = 246;
 
 function StageStatus({ status }: { status: Status }) {
   return (
@@ -38,17 +43,49 @@ function StageStatus({ status }: { status: Status }) {
   );
 }
 
-function StageCard({ stage, history, order }: { stage: Stage; history: any[]; order?: number }) {
+function StageDetails({ stage, history, children }: { stage: Stage; history: any[]; children: ReactNode }) {
+  const { title, icon: Icon, metrics, status = "normal", trend } = stage;
+  const [label, value, unit] = metrics[0];
+  return (
+    <Dialog>
+      <DialogTrigger asChild>{children}</DialogTrigger>
+      <DialogContent className="gap-5 bg-card sm:max-w-[42rem]">
+        <DialogHeader className="pr-6 text-left">
+          <DialogTitle className="flex items-center gap-2"><Icon aria-hidden className="size-5 text-primary" /> {title}</DialogTitle>
+          <DialogDescription>{stage.description}</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <StageStatus status={status} />
+          {stage.note && <p className="text-sm text-muted-foreground">{stage.note}</p>}
+        </div>
+        <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {metrics.map(([metric, reading, suffix]) => (
+            <div key={metric} className="rounded-lg border bg-muted p-3">
+              <dt className="text-xs text-muted-foreground">{metric}</dt>
+              <dd className="mt-1 font-semibold tabular-nums">{reading}{suffix && <span className="ml-1 text-xs font-normal text-muted-foreground">{suffix}</span>}</dd>
+            </div>
+          ))}
+        </dl>
+        {trend && (
+          <TrendChart
+            title={label} unit={unit ?? ""} current={value} color={trend.color} reference={trend.reference}
+            points={history.map((sample) => sample[trend.key] ?? null)}
+            clockMinutes={history.map((sample) => sample.clockMinutes)}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function StageCard({ stage, history }: { stage: Stage; history: any[] }) {
   const { title, icon: Icon, metrics, status = "normal" } = stage;
   const [label, value, unit] = metrics[0];
-  const trend = stage.trend;
 
   return (
     <article
       className="stage-card stage-enter relative flex min-w-0 flex-col gap-2.5 rounded-xl border p-3.5 sm:p-4"
       data-status={status}
-      data-featured={stage.featured || undefined}
-      style={{ "--stage-order": order ?? 0 } as CSSProperties}
     >
       <header className="flex flex-wrap items-center justify-between gap-1.5">
         <div className="flex min-w-0 items-center gap-2">
@@ -73,44 +110,128 @@ function StageCard({ stage, history, order }: { stage: Stage; history: any[]; or
         ))}
       </dl>
       <footer aria-hidden className="flex items-center justify-between gap-1 text-[11px] text-muted-foreground">
-        {order !== undefined && <span>{"流程 " + String(order + 1).padStart(2, "0")}</span>}
         <span className="stage-open ml-auto flex items-center gap-1 text-primary">详情 <ArrowUpRight className="size-3.5" /></span>
       </footer>
-      <Dialog>
-        <DialogTrigger asChild>
-          <Button
-            type="button" variant="ghost"
-            aria-label={"查看" + title + "详情"}
-            className="absolute inset-0 z-10 h-full w-full rounded-xl p-0 hover:bg-transparent"
-          />
-        </DialogTrigger>
-        <DialogContent className="gap-5 bg-card sm:max-w-[42rem]">
-          <DialogHeader className="pr-6 text-left">
-            <DialogTitle className="flex items-center gap-2"><Icon aria-hidden className="size-5 text-primary" /> {title}</DialogTitle>
-            <DialogDescription>{stage.description}</DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <StageStatus status={status} />
-            {stage.note && <p className="text-sm text-muted-foreground">{stage.note}</p>}
-          </div>
-          <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {metrics.map(([metric, reading, suffix]) => (
-              <div key={metric} className="rounded-lg border bg-muted p-3">
-                <dt className="text-xs text-muted-foreground">{metric}</dt>
-                <dd className="mt-1 font-semibold tabular-nums">{reading}{suffix && <span className="ml-1 text-xs font-normal text-muted-foreground">{suffix}</span>}</dd>
-              </div>
-            ))}
-          </dl>
-          {trend && (
-            <TrendChart
-              title={label} unit={unit ?? ""} current={value} color={trend.color} reference={trend.reference}
-              points={history.map((sample) => sample[trend.key] ?? null)}
-              clockMinutes={history.map((sample) => sample.clockMinutes)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <StageDetails stage={stage} history={history}>
+        <Button
+          type="button" variant="ghost"
+          aria-label={"查看" + title + "详情"}
+          className="absolute inset-0 z-10 h-full w-full rounded-xl p-0 hover:bg-transparent"
+        />
+      </StageDetails>
     </article>
+  );
+}
+
+function PipeLabel({ x, y, width, children }: { x: number; y: number; width: number; children: string }) {
+  const height = 24;
+  return (
+    <g className="process-pipe-label">
+      <rect x={x} y={y - height / 2} width={width} height={height} rx={5} />
+      <text x={x + width / 2} y={y} dy="0.35em" textAnchor="middle">{children}</text>
+    </g>
+  );
+}
+
+function ProcessDiagram({ stages, history, adjustmentOpen, onOpenAdjustment }: {
+  stages: Stage[];
+  history: any[];
+  adjustmentOpen: boolean;
+  onOpenAdjustment: () => void;
+}) {
+  const id = useId();
+  const nodes = stages.map((stage, index) => {
+    const x = NODE.left + index * (NODE.width + NODE.gap);
+    return { stage, x, center: x + NODE.width / 2 };
+  });
+  const trunkY = NODE.top + NODE.height / 2;
+  const width = NODE.left * 2 + NODE.width * nodes.length + NODE.gap * (nodes.length - 1);
+  const pretreatmentX = nodes.find(({ stage }) => stage.id === "pretreatment")!.center;
+  const membraneX = nodes.find(({ stage }) => stage.id === "membrane")!.center;
+  const returnLabelWidth = 104;
+  const sludgeLabelWidth = 100;
+  const sludgeLabelX = width - NODE.left - (NODE.width + sludgeLabelWidth) / 2;
+
+  return (
+    <section aria-labelledby="main-process" className="space-y-2">
+      <h3 id="main-process" className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground"><Layers aria-hidden className="size-3.5 text-primary" /> 主处理流程</h3>
+      <div className="process-canvas" role="region" aria-label="主处理流程画布" tabIndex={0}>
+        <svg
+          className="process-diagram"
+          viewBox={`0 0 ${width} ${CANVAS_HEIGHT}`}
+          width={width}
+          height={CANVAS_HEIGHT}
+          role="group"
+          aria-labelledby={`${id}-title`}
+          aria-describedby={`${id}-description`}
+        >
+          <title id={`${id}-title`}>主处理流程图</title>
+          <desc id={`${id}-description`}>{stages.map(({ title }) => title).join("，流向")}。膜池排空水返回预处理，剩余污泥进入污泥处理线。</desc>
+          <defs>
+            {["water", "auxiliary"].map((kind) => (
+              <marker key={kind} id={`${id}-${kind}`} markerWidth={10} markerHeight={10} viewBox="0 0 10 10" refX={10} refY={5} markerUnits="userSpaceOnUse" orient="auto">
+                <path className={`process-marker-${kind}`} d="M 0 0 L 10 5 L 0 10 Z" />
+              </marker>
+            ))}
+          </defs>
+          <g aria-hidden="true">
+            {nodes.slice(0, -1).map(({ stage, x }, index) => (
+              <g key={stage.id}>
+                <path className="process-pipe" d={`M ${x + NODE.width} ${trunkY} H ${nodes[index + 1].x}`} markerEnd={`url(#${id}-water)`} />
+                <path className="process-pipe-motion" d={`M ${x + NODE.width} ${trunkY} H ${nodes[index + 1].x - 10}`} />
+              </g>
+            ))}
+            <path className="process-pipe-auxiliary" d={`M ${membraneX} ${NODE.top} V ${RETURN_Y} H ${pretreatmentX} V ${NODE.top}`} markerEnd={`url(#${id}-auxiliary)`} />
+            <path className="process-pipe-auxiliary" d={`M ${membraneX} ${NODE.top + NODE.height} V ${SLUDGE_Y} H ${sludgeLabelX}`} markerEnd={`url(#${id}-auxiliary)`} />
+            <PipeLabel x={(pretreatmentX + membraneX - returnLabelWidth) / 2} y={RETURN_Y} width={returnLabelWidth}>膜池排空回流</PipeLabel>
+            <PipeLabel x={sludgeLabelX} y={SLUDGE_Y} width={sludgeLabelWidth}>污泥处理线</PipeLabel>
+          </g>
+          {nodes.map(({ stage, x }, index) => {
+            const isAdjustmentTarget = stage.id === DO_ADJUSTMENT.stageId;
+            return (
+              <foreignObject key={stage.id} x={x} y={NODE.top} width={NODE.width} height={NODE.height}>
+                <article className="process-node" data-status={stage.status ?? "normal"}>
+                  <header className="flex items-center justify-between text-xs font-semibold tabular-nums text-muted-foreground">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <span aria-hidden="true" className="process-node-dot" />
+                  </header>
+                  <h4 className="text-base leading-tight font-semibold">{stage.title}</h4>
+                  <dl className="process-node-metrics">
+                    {stage.metrics.slice(0, 2).map(([label, value, unit]) => (
+                      <div key={label} className="flex items-baseline justify-between gap-1">
+                        <dt className="truncate text-muted-foreground">{label}</dt>
+                        <dd className="max-w-[64%] shrink-0 truncate font-semibold tabular-nums">{value}{unit && <span className="ml-1 text-[10px] font-normal text-muted-foreground">{unit}</span>}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <footer className="flex items-center justify-between">
+                    <span className="process-node-status">{STATUS_LABEL[stage.status ?? "normal"]}</span>
+                    {isAdjustmentTarget ? (
+                      <Button
+                        id={DO_ADJUSTMENT.nodeId}
+                        type="button"
+                        size="sm"
+                        className="relative z-10 h-6 px-2 font-semibold"
+                        aria-label={`${DO_ADJUSTMENT.buttonLabel}（${DO_ADJUSTMENT.stageName}）`}
+                        aria-expanded={adjustmentOpen}
+                        aria-controls={adjustmentOpen ? DO_ADJUSTMENT.panelId : undefined}
+                        onClick={onOpenAdjustment}
+                      >
+                        {DO_ADJUSTMENT.buttonLabel}
+                      </Button>
+                    ) : <ArrowUpRight aria-hidden className="size-3.5 text-muted-foreground" />}
+                  </footer>
+                  <StageDetails stage={stage} history={history}>
+                    <button type="button" className="process-node-trigger" aria-label={"查看" + stage.title + "详情"} />
+                  </StageDetails>
+                </article>
+              </foreignObject>
+            );
+          })}
+        </svg>
+      </div>
+      <p className="process-scroll-hint text-xs text-muted-foreground">横向滑动查看完整流程</p>
+    </section>
   );
 }
 
@@ -127,11 +248,31 @@ function nh4Status(value: number, limit: number): Status {
   return value >= limit * 0.5 ? "warning" : "normal";
 }
 
-export function ProcessFlow({ state, limits, history, children }: { state: any; limits: any; history: any[]; children?: ReactNode }) {
+export function ProcessFlow({ state, limits, history, adjustment, onRefresh, children }: {
+  state: any;
+  limits: any;
+  history: any[];
+  adjustment: DoAdjustmentAdvice | null;
+  onRefresh: () => Promise<void>;
+  children?: ReactNode;
+}) {
+  const [selection, setSelection] = useState<{ advice: DoAdjustmentAdvice | null } | null>(null);
+  const openedAdvice = selection?.advice ?? null;
   const { influent, bio, measured, membrane, effluent, blower } = state;
   const airflowBad = measured.airflowQuality === "bad";
   const feedbackAirflow = measured.airflow ?? bio.airflow;
   const doValue = measured.do === null ? "—" : measured.do.toFixed(2);
+  const biologicalStage: Stage = {
+    id: DO_ADJUSTMENT.stageId, title: DO_ADJUSTMENT.stageName, icon: Biohazard, description: "好氧区 DO 目标值由人工确认，风量由仿真联动系统调节。",
+    status: doStatus(measured.do, bio.doSetpoint, measured.doQuality),
+    note: measured.doQuality === "bad" ? "DO 数据异常" : measured.doQuality === "suspect" ? "DO 数据可疑" : "DO 测量正常",
+    metrics: [
+      ["DO 测量值", doValue, "mg/L"], ["DO 目标值", bio.doSetpoint.toFixed(1), "mg/L"],
+      ["曝气风量", bio.airflow.toFixed(0), "m³/h"], ["MLSS", bio.mlss.toFixed(0), "mg/L"],
+      ["需氧量", bio.our.toFixed(0), "kgO₂/h"],
+    ],
+    trend: { key: "measuredDo", color: "var(--chart-do)", reference: { value: bio.doSetpoint, label: "DO 目标" } },
+  };
   const process: Stage[] = [
     {
       id: "inlet", title: "进水口", icon: ArrowDownToDot, description: "观察进水流量、水质与水温，识别负荷变化。",
@@ -143,20 +284,9 @@ export function ProcessFlow({ state, limits, history, children }: { state: any; 
     },
     {
       id: "pretreatment", title: "预处理", icon: Filter, description: "粗格栅、细格栅及膜格栅按流程截留进水杂物。",
-      metrics: [["栅前后液位差", "0.12", "m"], ["粗格栅", "运行正常"], ["细格栅", "运行正常"], ["膜格栅", "运行正常"]],
+      metrics: [["格栅液位差", "0.12", "m"], ["来水流量", influent.flow.toFixed(0), "m³/h"], ["粗格栅", "运行正常"], ["细格栅", "运行正常"], ["膜格栅", "运行正常"]],
     },
-    {
-      id: "biological", title: "生化池", icon: Biohazard, description: "好氧区 DO 目标值由人工确认，风量由仿真联动系统调节。",
-      featured: true,
-      status: doStatus(measured.do, bio.doSetpoint, measured.doQuality),
-      note: measured.doQuality === "bad" ? "DO 数据异常" : measured.doQuality === "suspect" ? "DO 数据可疑" : "DO 测量正常",
-      metrics: [
-        ["DO 测量值", doValue, "mg/L"], ["DO 目标值", bio.doSetpoint.toFixed(1), "mg/L"],
-        ["曝气风量", bio.airflow.toFixed(0), "m³/h"], ["MLSS", bio.mlss.toFixed(0), "mg/L"],
-        ["需氧量", bio.our.toFixed(0), "kgO₂/h"],
-      ],
-      trend: { key: "measuredDo", color: "var(--chart-do)", reference: { value: bio.doSetpoint, label: "DO 目标" } },
-    },
+    biologicalStage,
     {
       id: "membrane", title: "MBR 膜池", icon: Layers, description: "监测跨膜压差与膜通量，观察膜产水状态。",
       status: membrane.tmp >= 35 ? "danger" : membrane.tmp >= 25 ? "warning" : "normal",
@@ -198,12 +328,27 @@ export function ProcessFlow({ state, limits, history, children }: { state: any; 
   ];
   const attention = [...process, ...support].filter(({ status }) => status && status !== "normal").length;
 
+  function openAdjustment() {
+    if (!selection || (adjustment && adjustment.id !== openedAdvice?.id)) {
+      setSelection({ advice: adjustment });
+    } else {
+      document.getElementById(DO_ADJUSTMENT.panelId)?.focus();
+    }
+  }
+
+  function closeAdjustment() {
+    setSelection(null);
+    document.getElementById(DO_ADJUSTMENT.nodeId)?.focus();
+  }
+
   return (
     <section aria-labelledby="process-heading" className="monitor-layout flex flex-col gap-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 id="process-heading" className="text-xl font-semibold tracking-tight">工艺总览</h2>
-          <p className="mt-1 text-xs text-muted-foreground">点击卡片查看完整指标与对应趋势。</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            点击「生化池」卡片上的「调节 DO」打开调节区。点击卡片可查看完整指标。
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className={attention ? "border-warning/40 bg-warning/10 text-warning" : "border-success/35 bg-success/10 text-success"}>
@@ -214,10 +359,27 @@ export function ProcessFlow({ state, limits, history, children }: { state: any; 
           </Button>
         </div>
       </header>
-      <section aria-labelledby="main-process" className="space-y-2.5">
-        <h3 id="main-process" className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground"><Layers aria-hidden className="size-3.5 text-primary" /> 主处理流程</h3>
-        <div className="process-grid">{process.map((stage, order) => <StageCard key={stage.id} stage={stage} history={history} order={order} />)}</div>
-      </section>
+      <ProcessDiagram
+        stages={process}
+        history={history}
+        adjustmentOpen={selection !== null}
+        onOpenAdjustment={openAdjustment}
+      />
+      {selection && (
+        <DoAdjustment
+          key={openedAdvice?.id}
+          advice={openedAdvice}
+          currentSetpoint={bio.doSetpoint}
+          available={openedAdvice !== null && adjustment?.id === openedAdvice.id && adjustment.from === openedAdvice.from && adjustment.to === openedAdvice.to}
+          hasNewAdvice={adjustment !== null && adjustment.id !== openedAdvice?.id}
+          onRefresh={onRefresh}
+          onClose={closeAdjustment}
+        >
+          <StageDetails stage={biologicalStage} history={history}>
+            <Button type="button" variant="outline" size="sm">查看完整指标</Button>
+          </StageDetails>
+        </DoAdjustment>
+      )}
       {children}
       <section aria-labelledby="support-process" className="space-y-2.5">
         <h3 id="support-process" className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground"><Fan aria-hidden className="size-3.5 text-primary" /> 配套设施</h3>

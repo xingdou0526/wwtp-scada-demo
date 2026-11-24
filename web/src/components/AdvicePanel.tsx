@@ -15,22 +15,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { ExplainText, TermProvider } from "@/components/Term";
 import { KnowledgeReference } from "@/components/KnowledgeReference";
 import { OperationRecords } from "@/components/OperationRecords";
 import { postJson } from "@/lib/api";
+import { DO_ADJUSTMENT, type DoAdjustmentAdvice } from "@/lib/advice";
 import type { Term } from "@/lib/terms";
 import { cn } from "@/lib/utils";
 
@@ -74,32 +63,21 @@ function AiAvatar() {
   );
 }
 
-function AdviceBubble({ advice, tick, onAction }: { advice: any; tick: number; onAction: () => void }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [note, setNote] = useState("");
+function AdviceBubble({ advice, doAdjustment, remainingSeconds, onAction }: {
+  advice: any;
+  doAdjustment: DoAdjustmentAdvice | null;
+  remainingSeconds: number;
+  onAction: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const typeMeta = TYPE_META[advice.type] ?? TYPE_META.observe;
   const TypeIcon = typeMeta.icon;
   const priority = PRIORITY_META[advice.priority] ?? PRIORITY_META.low;
-  const expireIn = Math.max(0, advice.expiresAtTick - tick);
-  const executable = advice.type === "adjust" && !advice.blocked;
-
-  async function handleExecute() {
-    setBusy(true);
-    setError(null);
-    try {
-      await postJson(`/api/advice/${advice.id}/execute`, { operatorNote: note });
-      setConfirmOpen(false);
-      setNote("");
-      onAction();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = remainingSeconds % 60;
+  const remaining = minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
 
   async function handleIgnore() {
     setBusy(true);
@@ -126,7 +104,7 @@ function AdviceBubble({ advice, tick, onAction }: { advice: any; tick: number; o
             <Badge variant={priority.variant}>{priority.label}</Badge>
           </div>
           <h3 className="text-sm font-bold leading-snug">{advice.title}</h3>
-          <p className="text-[11px] text-muted-foreground">{advice.id} · 剩余有效期 {expireIn} min</p>
+          <p className="text-[11px] text-muted-foreground tabular-nums">{advice.id} · 现实时间剩余约 {remaining}</p>
         </header>
 
         {advice.action && (
@@ -137,6 +115,24 @@ function AdviceBubble({ advice, tick, onAction }: { advice: any; tick: number; o
             <span className="text-lg font-bold text-primary tabular-nums">{advice.action.to.toFixed(1)}</span>
             <span className="text-xs text-muted-foreground">mg/L</span>
           </div>
+        )}
+        {doAdjustment ? (
+          <p className="rounded-md border border-primary/20 bg-primary/5 px-2.5 py-2 text-xs leading-relaxed">
+            请点击主处理流程中的「
+            <a
+              href={`#${DO_ADJUSTMENT.nodeId}`}
+              className="rounded-sm font-bold text-primary underline underline-offset-2"
+              onClick={(event) => {
+                event.preventDefault();
+                document.getElementById(DO_ADJUSTMENT.nodeId)?.focus();
+              }}
+            >{DO_ADJUSTMENT.stageName}</a>
+            」卡片上的「{DO_ADJUSTMENT.buttonLabel}」，核对并确认将{DO_ADJUSTMENT.label}调至 <strong className="whitespace-nowrap tabular-nums">{doAdjustment.to.toFixed(1)} mg/L</strong>。
+          </p>
+        ) : advice.type === "adjust" && (
+          <p className="text-xs text-warning">
+            {advice.blocked ? "约束未满足，暂不可调节。" : "当前建议暂不可调节，请等待状态更新。"}
+          </p>
         )}
 
         <Section title="判断依据" icon={Info}>
@@ -182,66 +178,21 @@ function AdviceBubble({ advice, tick, onAction }: { advice: any; tick: number; o
 
         <footer className="flex flex-col gap-2 border-t pt-2">
           {advice.knowledgeRef && <KnowledgeReference id={advice.knowledgeRef} />}
-          {advice.type === "adjust" && (
-            <Button size="sm" disabled={!executable || busy} onClick={() => { setError(null); setConfirmOpen(true); }}>
-              <CheckCircle2 /> {advice.blocked ? "约束未满足，不可执行" : "采纳并手动执行"}
-            </Button>
-          )}
           <Button size="sm" variant="outline" disabled={busy} onClick={handleIgnore}>
             忽略建议
           </Button>
-          {!confirmOpen && error && <p role="alert" className="text-xs text-critical">{error}</p>}
+          {error && <p role="alert" className="text-xs text-critical">{error}</p>}
         </footer>
       </div>
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认手动执行该调节？</AlertDialogTitle>
-            <AlertDialogDescription>
-              {advice.action && (
-                <span className="mt-1 block text-sm font-semibold text-primary tabular-nums">
-                  DO 目标值 {advice.action.from.toFixed(1)} → {advice.action.to.toFixed(1)} mg/L
-                </span>
-              )}
-              执行后将由仿真联动系统自动调整风量，并在 {advice.reviewAfterTick - advice.createdTick} 仿真分钟后复评效果。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="operator-note">人工备注（可选，将写入操作记录用于规则优化）</Label>
-            <Textarea
-              id="operator-note"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="例如：进水冲击期间按建议上调，观察氨氮是否回落…"
-              rows={3}
-              maxLength={1000}
-            />
-            {error && <p role="alert" className="text-xs text-critical">{error}</p>}
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              className="w-24"
-              onClick={(event) => {
-                event.preventDefault();
-                void handleExecute();
-              }}
-              disabled={busy}
-            >
-              {busy ? "执行中…" : "确认执行"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </article>
   );
 }
 
-export function AdvicePanel({ activeAdvice, advices, tick, onAction, terms }: {
+export function AdvicePanel({ activeAdvice, doAdjustment, advices, remainingSeconds, onAction, terms }: {
   activeAdvice: any;
+  doAdjustment: DoAdjustmentAdvice | null;
   advices: any[];
-  tick: number;
+  remainingSeconds: number;
   onAction: () => void;
   terms: Term[];
 }) {
@@ -314,7 +265,7 @@ export function AdvicePanel({ activeAdvice, advices, tick, onAction, terms }: {
       <div className="flex min-h-[280px] flex-1 flex-col gap-3 overflow-y-auto p-3 lg:min-h-0">
         {activeAdvice ? (
           <TermProvider terms={terms}>
-            <AdviceBubble key={activeAdvice.id} advice={activeAdvice} tick={tick} onAction={onAction} />
+            <AdviceBubble key={activeAdvice.id} advice={activeAdvice} doAdjustment={doAdjustment} remainingSeconds={remainingSeconds} onAction={onAction} />
           </TermProvider>
         ) : (
           <article className="flex gap-2">
@@ -332,8 +283,9 @@ export function AdvicePanel({ activeAdvice, advices, tick, onAction, terms }: {
       </div>
 
       {/* 底部声明 */}
-      <footer className="border-t bg-card px-3 py-2 text-center text-[10px] text-muted-foreground">
-        AI 仅提供建议，执行由人工确认 · 本 Demo 仅改变仿真设定，不连接真实设备
+      <footer className="flex items-center justify-center gap-1.5 border-t bg-card px-3 py-2 text-center text-xs font-bold text-critical">
+        <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
+        <span>AI 仅提供建议，执行由人工确认</span>
       </footer>
     </aside>
   );

@@ -25,6 +25,15 @@ app.use(express.json());
 const history = []; // 真实值
 const measuredHistory = []; // 测量值（含数据质量异常）
 const MAX_HISTORY = 240;
+const REVIEW_TICK_SECONDS = 10;
+
+function getActiveAdvice() {
+  return advisor.advices.find((advice) => advice.status === "pending") ?? null;
+}
+
+function secondsPerTick(advice) {
+  return advice?.type === "adjust" && advice.action && !advice.blocked ? REVIEW_TICK_SECONDS : 1;
+}
 
 function pushHistory() {
   const s = sim.state;
@@ -40,8 +49,14 @@ for (let i = 0; i < 120; i++) {
   pushHistory();
 }
 
-// 每 1 秒推进 1 仿真分钟（60 倍加速）
+// 常态每秒推进一仿真分钟，待人工确认时每十秒推进一仿真分钟。
+let secondsIntoTick = 0;
+let stepRequested = false;
 setInterval(() => {
+  secondsIntoTick += 1;
+  if (!stepRequested && secondsIntoTick < secondsPerTick(getActiveAdvice())) return;
+  secondsIntoTick = 0;
+  stepRequested = false;
   sim.tick();
   pushHistory();
   advisor.evaluate(history, measuredHistory);
@@ -58,12 +73,20 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/api/state", (req, res) => {
+  const activeAdvice = getActiveAdvice();
+  const tickSeconds = secondsPerTick(activeAdvice);
+  const remainingTicks = activeAdvice ? Math.max(0, activeAdvice.expiresAtTick - sim.state.tick) : 0;
+  const untilNextTick = stepRequested ? 1 : tickSeconds - secondsIntoTick;
   res.json({
     state: sim.state,
     limits: sim.LIMITS,
     terms: management.data.terms,
     history,
-    activeAdvice: advisor.advices.find((a) => a.status === "pending") || null,
+    activeAdvice,
+    timing: {
+      secondsPerTick: tickSeconds,
+      adviceRemainingSeconds: remainingTicks > 0 ? (remainingTicks - 1) * tickSeconds + Math.max(1, untilNextTick) : 0,
+    },
     advices: advisor.advices.slice(0, 20),
     operations: advisor.operations.slice(0, 20),
   });
@@ -73,6 +96,7 @@ app.post("/api/scenario", (req, res) => {
   const { key, enabled } = req.body;
   const ok = sim.setScenario(key, enabled);
   if (!ok) return res.status(400).json({ error: "未知场景因子" });
+  stepRequested = true;
   res.json({ ok: true, scenario: sim.state.scenario });
 });
 
@@ -80,6 +104,7 @@ app.post("/api/fault", (req, res) => {
   const { type, enabled } = req.body;
   const ok = sim.injectFault(type, enabled);
   if (!ok) return res.status(400).json({ error: "未知异常类型" });
+  stepRequested = true;
   res.json({ ok: true, fault: sim.state.fault });
 });
 
