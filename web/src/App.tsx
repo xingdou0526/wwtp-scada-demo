@@ -7,6 +7,7 @@ import { ScenarioBar } from "@/components/ScenarioBar";
 import { ProcessFlow } from "@/components/ProcessFlow";
 import { TrendChart } from "@/components/TrendChart";
 import { AdvicePanel } from "@/components/AdvicePanel";
+import type { ActiveAdvice, DoAdjustmentAdvice } from "@/lib/advice";
 import { fetchState, postJson, formatClock } from "@/lib/api";
 
 export default function App() {
@@ -75,6 +76,22 @@ export default function App() {
   }, [load]);
 
   const state = data?.state;
+  const activeAdvices: ActiveAdvice[] = data?.activeAdvices ?? (data?.activeAdvice ? [{
+    ...data.activeAdvice,
+    remainingSeconds: data.timing?.adviceRemainingSeconds ?? Math.max(0, data.activeAdvice.expiresAtTick - (state?.tick ?? 0)),
+  }] : []);
+  const tickSeconds = data?.timing?.secondsPerTick ?? 1;
+  const adjustable = connected && state ? activeAdvices.find((advice) =>
+    advice.type === "adjust" && advice.status === "pending" && !advice.blocked &&
+    advice.expiresAtTick > state.tick && advice.action?.param === "doSetpoint" &&
+    advice.action.from === state.bio.doSetpoint
+  ) : undefined;
+  const doAdjustment: DoAdjustmentAdvice | null = adjustable?.action ? {
+    id: adjustable.id,
+    from: adjustable.action.from,
+    to: adjustable.action.to,
+    reviewMinutes: adjustable.reviewAfterTick - adjustable.createdTick,
+  } : null;
   const history = data?.history ?? [];
   const clockMinutes = history.map((sample: any) => sample.clockMinutes);
 
@@ -88,8 +105,7 @@ export default function App() {
                 <Droplets aria-hidden className="size-5" />
               </span>
               <div>
-                <h1 className="text-base font-semibold leading-tight tracking-tight sm:text-lg">水质净化厂智能中控仿真平台</h1>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">曝气 AI 辅助决策 · 模拟数据</p>
+                <h1 className="text-base font-semibold leading-tight tracking-tight sm:text-lg">水质净化厂智能曝气辅助决策</h1>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
@@ -98,6 +114,9 @@ export default function App() {
                   <Clock3 aria-hidden className="size-3.5 text-primary" />
                   仿真时间 {formatClock(state.clockMinutes)}
                   <span className="text-xs text-muted-foreground">（{state.tick} min）</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground" title={`每 ${tickSeconds} 秒推进 1 仿真分钟`}>
+                    {tickSeconds > 1 && "审阅 "}{60 / tickSeconds}×
+                  </span>
                 </span>
               )}
               <Badge variant="outline" className={connected ? "border-success/30 bg-success/10 text-success" : "border-critical/40 bg-critical/10 text-critical"}>
@@ -139,14 +158,14 @@ export default function App() {
         ) : (
           <div className="page-enter flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto scroll-smooth lg:flex-row lg:overflow-hidden">
             <div className="flex min-w-0 flex-1 flex-col lg:overflow-y-auto lg:pr-2">
-              <ProcessFlow state={state} limits={data.limits} history={history}>
+              <ProcessFlow state={state} limits={data.limits} history={history} adjustment={doAdjustment} onRefresh={load}>
                 <section aria-labelledby="trend-heading" className="space-y-2.5">
                   <h3 id="trend-heading" className="flex items-center gap-2 text-sm font-semibold"><ChartNoAxesCombined aria-hidden className="size-4 text-primary" /> 关键参数趋势</h3>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
                     <TrendChart
                       title="好氧区 DO（测量值）"
                       unit="mg/L"
-                      color="var(--primary)"
+                      color="var(--chart-do)"
                       points={history.map((h: any) => h.measuredDo)}
                       current={state.measured.do === null ? "—" : state.measured.do.toFixed(2)}
                       reference={{ value: state.bio.doSetpoint, label: "目标" }}
@@ -155,7 +174,7 @@ export default function App() {
                     <TrendChart
                       title="曝气风量（反馈）"
                       unit="m³/h"
-                      color="var(--success)"
+                      color="var(--chart-airflow)"
                       points={history.map((h: any) => h.measuredAirflow ?? h.airflow)}
                       current={(state.measured.airflow ?? state.bio.airflow).toFixed(0)}
                       clockMinutes={clockMinutes}
@@ -163,7 +182,7 @@ export default function App() {
                     <TrendChart
                       title="出水氨氮"
                       unit="mg/L"
-                      color="var(--warning)"
+                      color="var(--chart-nh4)"
                       points={history.map((h: any) => h.effNh4)}
                       current={state.effluent.nh4.toFixed(2)}
                       reference={{ value: data.limits.nh4InternalLimit, label: "内控" }}
@@ -172,7 +191,7 @@ export default function App() {
                     <TrendChart
                       title="风机功率"
                       unit="kW"
-                      color="#d6e3ff"
+                      color="var(--chart-power)"
                       points={history.map((h: any) => h.power)}
                       current={state.blower.power.toFixed(1)}
                       clockMinutes={clockMinutes}
@@ -182,9 +201,8 @@ export default function App() {
               </ProcessFlow>
             </div>
             <AdvicePanel
-              activeAdvice={data.activeAdvice}
-              advices={data.advices}
-              tick={state.tick}
+              activeAdvices={activeAdvices}
+              doAdjustment={doAdjustment}
               onAction={load}
               terms={data.terms ?? []}
             />

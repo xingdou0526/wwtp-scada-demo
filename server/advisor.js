@@ -1,46 +1,145 @@
 // 曝气 AI 辅助决策规则引擎：只输出建议，执行必须人工触发
+import { randomUUID } from "node:crypto";
 import { KNOWLEDGE_REFS as KB } from "./management-defaults.js";
 
 let adviceSeq = 0;
 const MAX_NOTE_LENGTH = 1000;
 
-export function createAdvisor(sim, { initialOperations = [], saveOperations = () => {} } = {}) {
+function executedRecord(advice, operation) {
+  return {
+    ...advice,
+    status: "executed",
+    executedTick: operation.executeTick,
+    endedAt: operation.executeTime,
+    endedTick: operation.executeTick,
+    endedClockMinutes: operation.before?.clockMinutes ?? null,
+    operationId: operation.id,
+  };
+}
+
+function adviceRank(advice) {
+  if (advice.kind === "inspect-sensor") return 0;
+  if (advice.kind === "inspect-airflow") return 1;
+  if (advice.kind === "inspect-cap") return 2;
+  if (advice.type === "adjust" && !advice.blocked) return 3;
+  if (advice.priority === "high") return 4;
+  if (advice.type === "adjust") return 5;
+  return 6;
+}
+
+export function createAdvisor(sim, {
+  initialOperations = [], saveOperations = () => {},
+  initialAdvices = [], saveAdvices = () => {},
+} = {}) {
   const advices = [];
   let operations = initialOperations;
   let loadRising = false;
-  for (const { adviceId } of operations) {
-    const sequence = /^ADV-(\d+)$/.exec(adviceId);
+  let sessionId = randomUUID();
+  const rulesAtIssue = new WeakMap();
+  for (const id of [...operations.map(({ adviceId }) => adviceId), ...initialAdvices.map(({ id }) => id)]) {
+    const sequence = /^ADV-(\d+)$/.exec(id);
     if (sequence) adviceSeq = Math.max(adviceSeq, Number(sequence[1]));
   }
+
+  const operationsByAdvice = new Map(operations.map((operation) => [operation.adviceId, operation]));
+  const restartedAt = new Date().toISOString();
+  let records = initialAdvices.map((advice) => {
+    if (advice.status !== "pending") return advice;
+    const operation = operationsByAdvice.get(advice.id);
+    return operation ? executedRecord(advice, operation) : {
+      ...advice, status: "interrupted", endReason: "restart", endedAt: restartedAt,
+      endedTick: null, endedClockMinutes: null,
+    };
+  });
+  if (records.some((record, index) => record !== initialAdvices[index])) saveAdvices(records);
 
   function commitOperations(next) {
     saveOperations(next);
     operations = next;
   }
 
-  function addAdvice(a) {
+  function commitAdvices(next) {
+    saveAdvices(next);
+    records = next;
+  }
+
+  function endedAdvice(advice, status, endReason, details = {}) {
+    return {
+      ...advice, status, endReason,
+      endedAt: new Date().toISOString(),
+      endedTick: sim.state.tick,
+      endedClockMinutes: sim.state.clockMinutes,
+      ...details,
+    };
+  }
+
+  function finishAdvices(pending, status, reason, details) {
+    if (!pending.length) return;
+    const updates = new Map(pending.map((advice) => [advice.id, endedAdvice(advice, status, reason, details)]));
+    commitAdvices(records.map((advice) => updates.get(advice.id) ?? advice));
+    for (const advice of pending) Object.assign(advice, updates.get(advice.id));
+  }
+
+  function addAdvice(a, replaces) {
     adviceSeq += 1;
     const advice = {
       id: `ADV-${String(adviceSeq).padStart(3, "0")}`,
+      sessionId,
+      createdAt: new Date().toISOString(),
       createdTick: sim.state.tick,
+      createdClockMinutes: sim.state.clockMinutes,
       status: "pending",
       ...a,
     };
+    const previous = replaces && endedAdvice(replaces, "superseded", "upgraded", { supersededBy: advice.id });
+    commitAdvices([advice, ...records.map((record) => record.id === previous?.id ? previous : record)]);
+    if (previous) Object.assign(replaces, previous);
+    rulesAtIssue.set(advice, sim.LIMITS);
     advices.unshift(advice);
-    if (advices.length > 50) advices.pop();
+    if (advices.length > 50) {
+      const oldestResolved = advices.findLastIndex(({ status }) => status !== "pending");
+      if (oldestResolved >= 0) advices.splice(oldestResolved, 1);
+    }
     return advice;
   }
 
-  function activeAdvice() {
-    return advices.find((a) => a.status === "pending");
+  function pendingAdvices() {
+    return advices.filter(({ status }) => status === "pending");
   }
 
   function invalidatePending(reason = "limits") {
-    const advice = activeAdvice();
-    if (advice) {
-      advice.status = "expired";
-      advice.invalidatedBy = reason;
-    }
+    finishAdvices(pendingAdvices(), "invalidated", reason, { invalidatedBy: reason });
+  }
+
+  function resetSession() {
+    finishAdvices(pendingAdvices(), "interrupted", "reset");
+    interruptReviews("reset");
+    sessionId = randomUUID();
+    advices.length = 0;
+    loadRising = false;
+  }
+
+  function adviceHistory() {
+    const archivedIds = new Set(records.map(({ id }) => id));
+    const legacy = operations.filter(({ adviceId }) => typeof adviceId === "string" && !archivedIds.has(adviceId)).map((operation) => executedRecord({
+      id: operation.adviceId,
+      sessionId: null,
+      createdAt: null,
+      createdTick: null,
+      createdClockMinutes: null,
+      expiresAtTick: null,
+      title: operation.title,
+      type: "adjust",
+      priority: null,
+      action: operation.action,
+      knowledgeRef: operation.knowledgeRef,
+      reasons: operation.during?.reasons ?? [],
+      forecast: operation.during?.forecast ?? {},
+      constraints: [],
+      risks: [],
+    }, operation));
+    return [...records.filter(({ status }) => status !== "pending"), ...legacy]
+      .sort((a, b) => (b.createdAt ?? b.endedAt ?? "").localeCompare(a.createdAt ?? a.endedAt ?? ""));
   }
 
   function executionRestriction() {
@@ -89,40 +188,78 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     loadRising = Boolean(flowRising || nh4Rising);
     const doVal = s.measured.do;
     const quality = s.measured.doQuality;
-    const inspection = quality === "bad" ? "inspect-sensor" : s.measured.airflowQuality === "bad" ? "inspect-airflow" : null;
+    const sensorIssue = doVal === null || quality !== "good" || s.fault.doDrift || s.fault.doStuck || s.fault.doOffline;
+    const airflowIssue = s.fault.airflowFeedback || s.measured.airflowQuality !== "good";
+    const doWin = windowStats(measuredHistory, "do", 10);
+    const doHighWin = windowStats(measuredHistory, "do", 15);
+    const lowDo = doWin && doWin.avg < s.bio.doSetpoint - 0.35;
+    const highDo = doHighWin && doHighWin.avg > s.bio.doSetpoint + 0.7;
+    const nearAirflowCap = s.bio.airflow > limits.airflowMax * 0.95;
+    const overNh4Limit = s.effluent.nh4 > limits.nh4InternalLimit;
+    const normalDo = !sensorIssue && !lowDo && Math.abs(doVal - s.bio.doSetpoint) < 0.4;
 
-    // 过期处理
-    for (const a of advices) {
-      if (a.status === "pending" && a.expiresAtTick <= s.tick) a.status = "expired";
-    }
-    const pending = activeAdvice();
-    if (pending) {
-      const instrumentAdvice = pending.kind === "inspect-sensor" || pending.kind === "inspect-airflow";
-      const inspectionChanged = (inspection || instrumentAdvice) && pending.kind !== inspection;
-      const unsafeAdjustment = pending.action && adjustmentRestriction(pending.action);
-      if (inspectionChanged || unsafeAdjustment) invalidatePending("conditions");
-    }
-    if (activeAdvice()) return;
+    finishAdvices(pendingAdvices().filter((a) => a.expiresAtTick <= s.tick), "expired", "timeout");
+    finishAdvices(pendingAdvices().filter((a) => rulesAtIssue.get(a) !== limits), "invalidated", "limits", { invalidatedBy: "limits" });
+    const changed = pendingAdvices().filter((advice) => {
+      if (advice.action) {
+        return adjustmentRestriction(advice.action) ||
+          (advice.kind === "raise" && doWin && !lowDo) ||
+          (advice.kind === "lower" && doHighWin && !highDo);
+      }
+      if (advice.kind === "inspect-sensor") return !sensorIssue;
+      if (advice.kind === "inspect-airflow") return !airflowIssue;
+      if (advice.kind === "inspect-cap") return sensorIssue || airflowIssue || !nearAirflowCap || !lowDo;
+      if (advice.kind === "observe") return sensorIssue || airflowIssue || !loadRising;
+      return advice.kind === "inspect-nh4" && (!overNh4Limit || (advice.assumesNormalDo && !normalDo));
+    });
+    finishAdvices(changed, "invalidated", "conditions", { invalidatedBy: "conditions" });
 
     // 同类建议冷却期，避免过期/忽略后反复刷屏
     function cooledDown(kind, ticks) {
       const last = advices.find((a) => a.kind === kind && !a.invalidatedBy);
-      return !last || s.tick - last.createdTick >= ticks;
+      return !last || (last.status !== "pending" && s.tick - last.createdTick >= ticks);
+    }
+
+    // 出水超内控可与独立的调节和仪表排查并存。
+    if (overNh4Limit && cooledDown("inspect-nh4", 60)) {
+      addAdvice({
+        kind: "inspect-nh4",
+        type: "inspect",
+        priority: "high",
+        title: normalDo ? "出水氨氮超内控，但 DO 正常：建议排查非曝气因素" : "出水氨氮超内控：建议核查出水数据与进水负荷",
+        action: null,
+        assumesNormalDo: normalDo,
+        reasons: [
+          { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L，超内控 ${limits.nh4InternalLimit} mg/L` },
+          ...(normalDo ? [{ label: "好氧区 DO", value: `${doVal.toFixed(2)} mg/L，处于目标范围内` }] : []),
+          { label: "水温", value: `${s.influent.temp.toFixed(0)} ℃${s.influent.temp < 15 ? "，低温抑制硝化活性" : ""}` },
+        ],
+        dataQuality: quality,
+        constraints: [normalDo ? "DO 正常时不盲目加曝气，避免无效能耗" : "结合可靠的好氧区测量数据评估曝气需求"],
+        forecast: {
+          note: normalDo
+            ? "建议核查水温、MLSS、污泥龄及进水毒性冲击；低温工况可通过提高 MLSS 或延长泥龄改善硝化"
+            : "建议核查出水检测与进水负荷，结合生化运行数据复判",
+        },
+        risks: normalDo ? ["仅提高曝气对此类氨氮升高改善有限"] : [],
+        knowledgeRef: KB.nitrification,
+        expiresAtTick: s.tick + 60,
+        reviewAfterTick: s.tick + 60,
+      });
     }
 
     const restriction = executionRestriction();
 
-    // R0：数据不可用 → 仅建议排查仪表，禁止调节
-    if (inspection === "inspect-sensor") {
-      if (!cooledDown(inspection, 30)) return;
+    // R0：测量不可信时排查仪表，并拦截曝气调节。
+    if (sensorIssue && cooledDown("inspect-sensor", 30)) {
       addAdvice({
         kind: "inspect-sensor",
         type: "inspect",
         priority: "high",
-        title: "DO 仪表数据不可用，建议现场排查",
+        title: quality === "bad" ? "DO 仪表数据不可用，建议现场排查" : "DO 仪表数据不可信，建议现场核查",
         action: null,
         reasons: [
-          { label: "DO 数据质量", value: `异常（${s.measured.doFaultType === "stuck" ? "数值卡死" : "数据中断"}）` },
+          { label: "DO 数据质量", value: quality === "bad" ? `异常（${s.measured.doFaultType === "stuck" ? "数值卡死" : "数据中断"}）` : "测量值可疑，需核查探头与读数" },
           { label: "当前风量", value: `${s.bio.airflow.toFixed(0)} m³/h，保持现有联动运行` },
         ],
         dataQuality: s.measured.doQuality,
@@ -133,13 +270,11 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         expiresAtTick: s.tick + 60,
         reviewAfterTick: s.tick + 30,
       });
-      return;
     }
 
-    if (inspection === "inspect-airflow") {
-      if (!cooledDown(inspection, 30)) return;
+    if (airflowIssue && cooledDown("inspect-airflow", 30)) {
       addAdvice({
-        kind: inspection,
+        kind: "inspect-airflow",
         type: "inspect",
         priority: "high",
         title: "风量反馈异常，建议先核查仪表与联动信号",
@@ -155,16 +290,15 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         expiresAtTick: s.tick + 60,
         reviewAfterTick: s.tick + 30,
       });
-      return;
     }
 
-    const doWin = windowStats(measuredHistory, "do", 10);
-    if (!doWin || doVal === null) return;
-
-    const nearAirflowCap = s.bio.airflow > limits.airflowMax * 0.95;
+    if (sensorIssue || airflowIssue || !doWin) return;
+    const pendingDo = pendingAdvices();
+    if (pendingDo.some((advice) => advice.action || advice.kind === "inspect-cap")) return;
+    const observation = pendingDo.find((advice) => advice.kind === "observe");
 
     // R1：DO 持续低于目标 → 建议上调 DO 目标值
-    if (doWin.avg < s.bio.doSetpoint - 0.35) {
+    if (lowDo) {
       if (nearAirflowCap) {
         if (!cooledDown("inspect-cap", 60)) return;
         addAdvice({
@@ -184,10 +318,9 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
           knowledgeRef: KB.aeration,
           expiresAtTick: s.tick + 60,
           reviewAfterTick: s.tick + 30,
-        });
+        }, observation);
         return;
       }
-      if (quality !== "good") return;
       if (!cooledDown("raise", 15)) return;
       const to = round1(Math.min(limits.doSetpointMax, s.bio.doSetpoint + limits.doSetpointStep));
       if (to === s.bio.doSetpoint) return;
@@ -200,6 +333,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         reasons: [
           { label: "好氧区 DO", value: `近 10 分钟均值 ${doWin.avg.toFixed(2)} mg/L，低于目标 ${s.bio.doSetpoint.toFixed(1)} mg/L` },
           { label: "进水负荷", value: `流量 ${s.influent.flow.toFixed(0)} m³/h，进水氨氮 ${s.influent.nh4.toFixed(1)} mg/L` },
+          ...(observation ? [{ label: "此前负荷观察", value: observation.reasons[0].value }] : []),
           { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L（内控 ${limits.nh4InternalLimit} mg/L）` },
         ],
         dataQuality: quality,
@@ -219,16 +353,15 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         knowledgeRef: KB.aeration,
         expiresAtTick: s.tick + 15,
         reviewAfterTick: s.tick + limits.reviewAfter,
-      });
+      }, observation);
       return;
     }
 
     // R2：DO 持续偏高且负荷较低 → 节能下调（冲击/负荷上升工况下禁止节能建议）
     const lowLoad = s.scenario.night || s.influent.flow < 700;
-    const doHighWin = windowStats(measuredHistory, "do", 15);
     if (
-      doHighWin && doHighWin.avg > s.bio.doSetpoint + 0.7 &&
-      s.effluent.nh4 < Math.min(0.5, limits.nh4InternalLimit) && lowLoad && quality === "good" &&
+      highDo &&
+      s.effluent.nh4 < Math.min(0.5, limits.nh4InternalLimit) && lowLoad &&
       s.bio.doSetpoint > limits.doSetpointMin &&
       !s.scenario.shock && !s.scenario.storm && !loadRising &&
       cooledDown("lower", 90)
@@ -266,7 +399,7 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     }
 
     // R3：进水负荷快速上升的前瞻提示（DO 尚未跌破时）
-    if (loadRising && quality === "good" && doVal > s.bio.doSetpoint - 0.35 && cooledDown("observe", 60)) {
+    if (loadRising && doVal > s.bio.doSetpoint - 0.35 && cooledDown("observe", 60)) {
       addAdvice({
         kind: "observe",
         type: "observe",
@@ -287,34 +420,6 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
         expiresAtTick: s.tick + 30,
         reviewAfterTick: s.tick + 30,
       });
-      return;
-    }
-
-    // R4：DO 正常但出水氨氮超标 → 非曝气因素排查
-    if (
-      s.effluent.nh4 > limits.nh4InternalLimit &&
-      Math.abs(doVal - s.bio.doSetpoint) < 0.4 && quality === "good" &&
-      cooledDown("inspect-nh4", 60)
-    ) {
-      addAdvice({
-        kind: "inspect-nh4",
-        type: "inspect",
-        priority: "high",
-        title: "出水氨氮超内控，但 DO 正常：建议排查非曝气因素",
-        action: null,
-        reasons: [
-          { label: "出水氨氮", value: `${s.effluent.nh4.toFixed(2)} mg/L，超内控 ${limits.nh4InternalLimit} mg/L` },
-          { label: "好氧区 DO", value: `${doVal.toFixed(2)} mg/L，处于目标范围内` },
-          { label: "水温", value: `${s.influent.temp.toFixed(0)} ℃${s.influent.temp < 15 ? "，低温抑制硝化活性" : ""}` },
-        ],
-        dataQuality: quality,
-        constraints: ["DO 正常时不盲目加曝气，避免无效能耗"],
-        forecast: { note: "建议核查水温、MLSS、污泥龄及进水毒性冲击；低温工况可通过提高 MLSS 或延长泥龄改善硝化" },
-        risks: ["仅提高曝气对此类氨氮升高改善有限"],
-        knowledgeRef: KB.nitrification,
-        expiresAtTick: s.tick + 60,
-        reviewAfterTick: s.tick + 60,
-      });
     }
   }
 
@@ -322,11 +427,11 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     const limits = sim.LIMITS;
     const a = advices.find((x) => x.id === id);
     if (!a) return { ok: false, error: "建议不存在" };
-    if (a.invalidatedBy === "limits") return { ok: false, error: "规则参数已更新，请查看新建议" };
+    if (a.invalidatedBy === "limits" || (a.status === "pending" && rulesAtIssue.get(a) !== limits)) return { ok: false, error: "规则参数已更新，请查看新建议" };
     if (a.invalidatedBy === "conditions") return { ok: false, error: "工况或数据质量已变化，请查看新建议" };
     if (a.status !== "pending") return { ok: false, error: `建议状态为 ${a.status}，不可执行` };
     if (a.expiresAtTick <= sim.state.tick) {
-      a.status = "expired";
+      finishAdvices([a], "expired", "timeout");
       return { ok: false, error: "建议已过期" };
     }
     if (a.type !== "adjust" || !a.action) return { ok: false, error: "该建议为排查/观察类，无调节动作" };
@@ -366,15 +471,21 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
     commitOperations([op, ...operations]);
     sim.state.bio.doSetpoint = to;
     sim.state.lastExecuteTick = sim.state.tick;
-    a.status = "executed";
-    a.executedTick = sim.state.tick;
+    // 操作记录是执行结果的持久化来源，重启时按 adviceId 与原建议快照对齐。
+    const completed = executedRecord(a, op);
+    records = records.map((advice) => advice.id === id ? completed : advice);
+    Object.assign(a, completed);
     return { ok: true, operation: op };
   }
 
   function ignore(id) {
     const a = advices.find((x) => x.id === id);
     if (!a || a.status !== "pending") return { ok: false, error: "建议不存在或已处理" };
-    a.status = "ignored";
+    if (a.expiresAtTick <= sim.state.tick) {
+      finishAdvices([a], "expired", "timeout");
+      return { ok: false, error: "建议已过期" };
+    }
+    finishAdvices([a], "ignored", "operator");
     return { ok: true };
   }
 
@@ -420,9 +531,16 @@ export function createAdvisor(sim, { initialOperations = [], saveOperations = ()
 
   return {
     advices,
+    get activeAdvices() {
+      return pendingAdvices().filter((a) => a.expiresAtTick > sim.state.tick && rulesAtIssue.get(a) === sim.LIMITS)
+        .filter((a) => !a.action || !adjustmentRestriction(a.action))
+        .sort((a, b) => adviceRank(a) - adviceRank(b));
+    },
+    get adviceHistory() { return adviceHistory(); },
     get operations() { return operations; },
     evaluate,
     invalidatePending,
+    resetSession,
     execute,
     ignore,
     updateFeedback,
