@@ -29,8 +29,18 @@ export function gzipMiddleware(req, res, next) {
     res.setHeader("Content-Encoding", "gzip");
     res.vary("Accept-Encoding");
     gzip = createGzip({ level: constants.Z_DEFAULT_COMPRESSION });
+    let waitingForSocket = false;
     gzip.on("data", (chunk) => {
-      if (!res.writableEnded && !res.destroyed) origWrite(chunk);
+      if (res.writableEnded || res.destroyed) return;
+      if (origWrite(chunk) === false) {
+        waitingForSocket = true;
+        gzip.pause();
+      }
+    });
+    gzip.on("drain", () => {
+      if (!waitingForSocket && !res.writableEnded && !res.destroyed) {
+        res.emit("drain");
+      }
     });
     gzip.on("end", () => {
       if (!res.writableEnded && !res.destroyed) origEnd();
@@ -38,6 +48,12 @@ export function gzipMiddleware(req, res, next) {
     gzip.on("error", () => {
       gzip?.destroy();
       if (!res.destroyed) res.destroy();
+    });
+    res.on("drain", () => {
+      if (waitingForSocket && gzip && !gzip.destroyed) {
+        waitingForSocket = false;
+        gzip.resume();
+      }
     });
     const destroyGzip = () => {
       if (gzip && !gzip.destroyed) gzip.destroy();

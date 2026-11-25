@@ -255,8 +255,9 @@ test("MBR 膜通量随进水流量联动变化，且演示节奏控制、快捷�
 test("配置 staticDir 时可托管前端静态页、启用 Gzip 与缓存头并保持 /api 404 隔离", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "wwtp-static-test-"));
   mkdirSync(join(dir, "assets"), { recursive: true });
+  const largeJs = Array.from({ length: 8000 }, (_, i) => `export const v${i} = "payload-${i}-abcdef0123456789";`).join("\n");
   writeFileSync(join(dir, "index.html"), "<!doctype html><title>WWTP</title>");
-  writeFileSync(join(dir, "assets", "app-abc123.js"), `console.log(${JSON.stringify("x".repeat(2048))});`);
+  writeFileSync(join(dir, "assets", "app-abc123.js"), largeJs);
   const instance = createApp({
     managementFile: join(dir, "management.json"),
     operationsFile: join(dir, "operations.json"),
@@ -294,7 +295,9 @@ test("配置 staticDir 时可托管前端静态页、启用 Gzip 与缓存头并
   assert.equal(asset.status, 200);
   assert.equal(asset.headers.get("content-encoding"), "gzip");
   assert.match(asset.headers.get("cache-control") ?? "", /immutable/);
-  assert.match(await asset.text(), /console\.log/);
+  const assetText = await asset.text();
+  assert.equal(assetText.length, largeJs.length, "超过高水位线的大静态 JS 文件经 Gzip 流式传输后应完整无截断");
+  assert.equal(assetText, largeJs);
 
   const stateRes = await fetch(`${baseUrl}/api/state`, { headers: { "Accept-Encoding": "gzip" } });
   assert.equal(stateRes.status, 200);
