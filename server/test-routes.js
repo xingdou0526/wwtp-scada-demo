@@ -361,3 +361,82 @@ test("SSE /api/events 首连推送全量快照、后续推送轻量增量且关�
   assert.equal("terms" in delta.data, false);
   controller.abort();
 });
+
+test("配置 basePath（如 /shuiwu）时前后端路径、History 路由、静态资源改写与健康检查均正常工作", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "wwtp-basepath-test-"));
+  mkdirSync(join(dir, "assets"), { recursive: true });
+  const jsBody = Array.from({ length: 4000 }, (_, i) => `export const k${i} = ${i};`).join("\n");
+  writeFileSync(
+    join(dir, "index.html"),
+    '<!doctype html><html><head><title>WWTP</title><script type="module" src="./assets/index-test.js"></script><link rel="stylesheet" href="./assets/index-test.css"></head><body><div id="root"></div></body></html>',
+  );
+  writeFileSync(join(dir, "assets", "index-test.js"), jsBody);
+  writeFileSync(join(dir, "assets", "index-test.css"), "body{margin:0}");
+
+  const instance = createApp({
+    managementFile: join(dir, "management.json"),
+    operationsFile: join(dir, "operations.json"),
+    adviceFile: join(dir, "advices.json"),
+    staticDir: dir,
+    basePath: "/shuiwu/",
+    autoStart: false,
+  });
+  const server = instance.app.listen(0, "127.0.0.1");
+  t.after(() => {
+    instance.close();
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise((res, rej) => {
+    server.once("listening", res);
+    server.once("error", rej);
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+
+  // 不带尾斜杠与带尾斜杠及 History 子路由均返回改写后的 index.html
+  for (const route of ["/shuiwu", "/shuiwu/", "/shuiwu/admin", "/shuiwu/admin/"]) {
+    const res = await fetch(`${origin}${route}`);
+    assert.equal(res.status, 200, `${route} 应返回 200`);
+    assert.equal(res.headers.get("cache-control"), "no-cache");
+    const html = await res.text();
+    assert.match(html, /window\.__WWTP_BASE_PATH__="\/shuiwu"/);
+    assert.match(html, /src="\/shuiwu\/assets\/index-test\.js"/);
+    assert.match(html, /href="\/shuiwu\/assets\/index-test\.css"/);
+  }
+
+  // 静态资源经 Gzip 正常完整返回
+  const asset = await fetch(`${origin}/shuiwu/assets/index-test.js`, { headers: { "Accept-Encoding": "gzip" } });
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("content-encoding"), "gzip");
+  assert.equal(await asset.text(), jsBody);
+
+  // 业务 API 与 SSE 均挂载在 /shuiwu/api/* 下
+  const stateRes = await fetch(`${origin}/shuiwu/api/state`);
+  assert.equal(stateRes.status, 200);
+  assert.equal((await stateRes.json()).history.length, 120);
+
+  const adminRes = await fetch(`${origin}/shuiwu/api/admin`);
+  assert.equal(adminRes.status, 200);
+
+  const sseController = new AbortController();
+  t.after(() => sseController.abort());
+  const sseRes = await fetch(`${origin}/shuiwu/api/events`, {
+    headers: { Accept: "text/event-stream" },
+    signal: sseController.signal,
+  });
+  assert.equal(sseRes.status, 200);
+  assert.match(sseRes.headers.get("content-type") ?? "", /^text\/event-stream/);
+  sseController.abort();
+
+  // 容器探活根 /api/health 与带前缀 /shuiwu/api/health 均可访问
+  assert.equal((await fetch(`${origin}/api/health`)).status, 200);
+  assert.equal((await fetch(`${origin}/shuiwu/api/health`)).status, 200);
+
+  // 根路径重定向到 /shuiwu，未加前缀的业务 API 与缺失资源保持 404
+  const rootRes = await fetch(`${origin}/`, { redirect: "manual" });
+  assert.equal(rootRes.status, 302);
+  assert.equal(rootRes.headers.get("location"), "/shuiwu");
+  assert.equal((await fetch(`${origin}/api/state`)).status, 404);
+  assert.equal((await fetch(`${origin}/shuiwu/assets/missing.js`)).status, 404);
+  assert.equal((await fetch(`${origin}/shuiwu/api/not-found`)).status, 404);
+});

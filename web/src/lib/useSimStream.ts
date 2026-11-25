@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchState, postJson } from "@/lib/api";
+import { apiUrl, fetchState, postJson } from "@/lib/api";
 import type { HistoryPoint, StateDelta, StateResponse } from "@/lib/types";
 
 const MAX_HISTORY = 240;
@@ -135,7 +135,7 @@ export function useSimStream(active: boolean) {
 
       const connect = () => {
         if (document.hidden || source) return;
-        const es = new EventSource("/api/events");
+        const es = new EventSource(apiUrl("/api/events"));
         source = es;
 
         es.addEventListener("snapshot", (event) => {

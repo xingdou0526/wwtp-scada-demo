@@ -13,6 +13,7 @@ ENV NODE_ENV=production \
     TZ=Asia/Shanghai \
     WWTP_HOST=0.0.0.0 \
     WWTP_PORT=3001 \
+    WWTP_BASE_PATH="" \
     WWTP_STATIC_DIR=/app/web/dist
 
 COPY server/package.json server/package-lock.json ./server/

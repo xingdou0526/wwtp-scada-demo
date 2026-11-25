@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState, type MouseEvent } from "react";
+import { getBasePath } from "@/lib/base-path";
 
 export type AppRoute = "control" | "admin";
 
-const BASE_PATH = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
-
 export function routeHref(route: AppRoute): string {
-  if (route === "admin") return `${BASE_PATH}/admin`;
-  return BASE_PATH ? `${BASE_PATH}/` : "/";
+  const base = getBasePath();
+  if (route === "admin") return `${base}/admin`;
+  return base || "/";
 }
 
 export function resolveRoute(pathname: string, hash = ""): AppRoute {
-  const relative = BASE_PATH && pathname.startsWith(BASE_PATH)
-    ? pathname.slice(BASE_PATH.length)
+  const base = getBasePath();
+  const relative = base && (pathname === base || pathname.startsWith(`${base}/`))
+    ? pathname.slice(base.length) || "/"
     : pathname;
   const normalized = relative.replace(/\/+$/, "") || "/";
   if (normalized === "/admin") return "admin";

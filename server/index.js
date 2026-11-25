@@ -1,17 +1,18 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createApp } from "./app.js";
+import { createApp, normalizeBasePath } from "./app.js";
 
 const PORT = Number(process.env.WWTP_PORT ?? 3001);
 const HOST = process.env.WWTP_HOST ?? "127.0.0.1";
+const BASE_PATH = normalizeBasePath(process.env.WWTP_BASE_PATH);
 const defaultStaticDir = fileURLToPath(new URL("../web/dist", import.meta.url));
 const candidateStaticDir = process.env.WWTP_STATIC_DIR ? resolve(process.env.WWTP_STATIC_DIR) : defaultStaticDir;
 const staticDir = existsSync(resolve(candidateStaticDir, "index.html")) ? candidateStaticDir : undefined;
 
-const instance = createApp({ staticDir });
+const instance = createApp({ staticDir, basePath: BASE_PATH });
 const server = instance.app.listen(PORT, HOST, () => {
-  console.log(`[server] API listening on http://${HOST}:${PORT}`);
+  console.log(`[server] API listening on http://${HOST}:${PORT}${BASE_PATH || "/"}`);
   if (staticDir) console.log(`[server] Serving frontend from ${staticDir}`);
 });
 

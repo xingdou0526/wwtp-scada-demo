@@ -10,6 +10,7 @@ services:
     environment:
       WWTP_HOST: "0.0.0.0"
       WWTP_PORT: "3001"
+      WWTP_BASE_PATH: "${WWTP_BASE_PATH:-}"
       TZ: "Asia/Shanghai"
     volumes:
       - wwtp_data:/app/server/data

@@ -1,16 +1,22 @@
 // API 封装
+import { withBasePath } from "@/lib/base-path";
 import type { StateResponse } from "@/lib/types";
 export { formatClock, formatDateTime, formatTick } from "@/lib/time";
 
+export function apiUrl(path: string) {
+  if (/^https?:\/\//i.test(path)) return path;
+  return withBasePath(path);
+}
+
 export async function fetchState(signal?: AbortSignal): Promise<StateResponse> {
-  const r = await fetch("/api/state", { signal });
+  const r = await fetch(apiUrl("/api/state"), { signal });
   if (!r.ok) throw new Error("state fetch failed");
   return r.json();
 }
 
 export async function requestJson<T>(url: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const { method, body, signal } = options;
-  const r = await fetch(url, {
+  const r = await fetch(apiUrl(url), {
     method,
     signal,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -67,7 +73,7 @@ export interface OperationRecord {
 }
 
 export async function fetchOperations(signal: AbortSignal): Promise<OperationRecord[]> {
-  const response = await fetch("/api/operations", { signal });
+  const response = await fetch(apiUrl("/api/operations"), { signal });
   if (!response.ok) throw new Error("读取操作记录失败");
   const data = await response.json();
   return data.operations;

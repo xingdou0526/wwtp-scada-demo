@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import express from "express";
 import cors from "cors";
@@ -21,15 +21,34 @@ function secondsPerTick(advices) {
   return advices.some((advice) => advice.type === "adjust" && advice.action && !advice.blocked) ? REVIEW_TICK_SECONDS : 1;
 }
 
+export function normalizeBasePath(raw) {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}` : "";
+}
+
+function renderIndexHtml(rawHtml, basePath) {
+  const assetBase = `${basePath}/assets/`;
+  const rewritten = rawHtml.replace(/(src|href)=(["'])\.?\/assets\//g, `$1=$2${assetBase}`);
+  const serialized = JSON.stringify(basePath).replace(/</g, "\\u003c");
+  const injection = `<script>window.__WWTP_BASE_PATH__=${serialized};</script>`;
+  return rewritten.includes("</head>")
+    ? rewritten.replace("</head>", `  ${injection}\n  </head>`)
+    : `${injection}${rewritten}`;
+}
+
 export function createApp({
   managementFile,
   operationsFile,
   adviceFile,
   staticDir,
+  basePath = "",
   autoStart = true,
   random,
 } = {}) {
+  const normalizedBase = normalizeBasePath(basePath);
   const app = express();
+  const router = express.Router();
   const management = openManagementStore(managementFile);
   const sim = createSimulation(management.data.limits, { random });
   const advisor = createAdvisor(sim, {
@@ -177,13 +196,13 @@ export function createApp({
   // CORS 与 Gzip 必须注册在所有业务路由之前
   app.use(cors());
   app.use(gzipMiddleware);
-  app.use("/api/admin", managementRoutes(management, sim, advisor, broadcastSnapshot));
-  app.get("/api/knowledge/:id", (req, res) => {
+  router.use("/api/admin", managementRoutes(management, sim, advisor, broadcastSnapshot));
+  router.get("/api/knowledge/:id", (req, res) => {
     const entry = management.getKnowledge(req.params.id);
     if (!entry) return res.status(404).json({ error: "知识条目不存在" });
     res.json(entry);
   });
-  app.use(express.json());
+  router.use(express.json());
 
   const timer = autoStart
     ? setInterval(() => {
@@ -208,11 +227,12 @@ export function createApp({
       }, SSE_HEARTBEAT_MS)
     : null;
 
-  app.get("/api/health", (_req, res) => {
+  const healthHandler = (_req, res) => {
     res.json({ status: "ok", time: new Date().toISOString() });
-  });
+  };
+  router.get("/api/health", healthHandler);
 
-  app.get("/api/events", (req, res) => {
+  router.get("/api/events", (req, res) => {
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -226,19 +246,19 @@ export function createApp({
     sendSse(res, "snapshot", buildStatePayload());
   });
 
-  app.get("/api/state", (_req, res) => {
+  router.get("/api/state", (_req, res) => {
     res.json(buildStatePayload());
   });
 
-  app.get("/api/compare", (_req, res) => {
+  router.get("/api/compare", (_req, res) => {
     res.json(getBaselineCompare());
   });
 
-  app.get("/api/advice/history", (_req, res) => {
+  router.get("/api/advice/history", (_req, res) => {
     res.json({ advices: advisor.adviceHistory });
   });
 
-  app.post("/api/sim/pause", (req, res) => {
+  router.post("/api/sim/pause", (req, res) => {
     const { paused: nextPaused } = req.body ?? {};
     if (typeof nextPaused !== "boolean") return res.status(400).json({ error: "请提供有效的暂停状态" });
     paused = nextPaused;
@@ -246,7 +266,7 @@ export function createApp({
     res.json({ ok: true, paused, snapshot: buildStatePayload() });
   });
 
-  app.post("/api/sim/fast-forward", (req, res) => {
+  router.post("/api/sim/fast-forward", (req, res) => {
     const raw = req.body?.minutes ?? 30;
     if (!Number.isSafeInteger(raw) || raw < 1 || raw > MAX_FAST_FORWARD) {
       return res.status(400).json({ error: `快进分钟数须为 1 至 ${MAX_FAST_FORWARD} 的整数` });
@@ -258,7 +278,7 @@ export function createApp({
     res.json({ ok: true, advanced: raw, snapshot: buildStatePayload() });
   });
 
-  app.post("/api/preset", (req, res) => {
+  router.post("/api/preset", (req, res) => {
     const { preset } = req.body ?? {};
     if (!["shock", "night", "fault"].includes(preset)) {
       return res.status(400).json({ error: "未知快捷演示场景" });
@@ -291,7 +311,7 @@ export function createApp({
     res.json({ ok: true, preset, snapshot: buildStatePayload() });
   });
 
-  app.post("/api/scenario", (req, res) => {
+  router.post("/api/scenario", (req, res) => {
     const { key, enabled } = req.body ?? {};
     const ok = sim.setScenario(key, enabled);
     if (!ok) return res.status(400).json({ error: "未知场景因子" });
@@ -303,7 +323,7 @@ export function createApp({
     res.json({ ok: true, scenario: sim.state.scenario, snapshot: buildStatePayload() });
   });
 
-  app.post("/api/fault", (req, res) => {
+  router.post("/api/fault", (req, res) => {
     const { type, enabled } = req.body ?? {};
     const ok = sim.injectFault(type, enabled);
     if (!ok) return res.status(400).json({ error: "未知异常类型" });
@@ -315,7 +335,7 @@ export function createApp({
     res.json({ ok: true, fault: sim.state.fault, snapshot: buildStatePayload() });
   });
 
-  app.post("/api/advice/:id/execute", (req, res) => {
+  router.post("/api/advice/:id/execute", (req, res) => {
     const result = advisor.execute(req.params.id, req.body?.operatorNote);
     if (!result.ok) return res.status(400).json(result);
     const { id, executeTick, action } = result.operation;
@@ -324,14 +344,14 @@ export function createApp({
     res.json({ ...result, snapshot: buildStatePayload() });
   });
 
-  app.post("/api/advice/:id/ignore", (req, res) => {
+  router.post("/api/advice/:id/ignore", (req, res) => {
     const result = advisor.ignore(req.params.id);
     if (!result.ok) return res.status(400).json(result);
     broadcastUpdate();
     res.json({ ...result, snapshot: buildStatePayload() });
   });
 
-  app.get("/api/operations", (req, res) => {
+  router.get("/api/operations", (req, res) => {
     const { reviewStatus } = req.query;
     if (reviewStatus !== undefined && !["pending", "reviewed", "interrupted"].includes(reviewStatus)) {
       return res.status(400).json({ error: "无效的复评状态" });
@@ -340,20 +360,28 @@ export function createApp({
     res.json({ operations });
   });
 
-  app.post("/api/operations/:id/feedback", (req, res) => {
+  router.post("/api/operations/:id/feedback", (req, res) => {
     const result = advisor.updateFeedback(req.params.id, req.body);
     if (!result.ok) return res.status(result.status).json({ ok: false, error: result.error });
     res.json(result);
   });
 
-  app.post("/api/reset", (_req, res) => {
+  router.post("/api/reset", (_req, res) => {
     resetAll();
     broadcastSnapshot();
     res.json({ ok: true, snapshot: buildStatePayload() });
   });
 
   if (staticDir && existsSync(join(staticDir, "index.html"))) {
-    app.use(express.static(staticDir, {
+    const indexHtml = renderIndexHtml(readFileSync(join(staticDir, "index.html"), "utf8"), normalizedBase);
+    const sendIndex = (_req, res) => {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.send(indexHtml);
+    };
+    router.get(["/", "/index.html"], sendIndex);
+    router.use(express.static(staticDir, {
+      index: false,
       setHeaders(res, filePath) {
         if (/[\\/]assets[\\/]/.test(filePath)) {
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
@@ -362,10 +390,14 @@ export function createApp({
         }
       },
     }));
-    app.get(/^(?!\/(?:api|assets)(?:\/|$)).*/, (_req, res) => {
-      res.setHeader("Cache-Control", "no-cache");
-      res.sendFile(join(staticDir, "index.html"));
-    });
+    router.get(/^(?!\/(?:api|assets)(?:\/|$)).*/, sendIndex);
+  }
+
+  app.use(normalizedBase || "/", router);
+  if (normalizedBase) {
+    // 保留根健康检查便于容器 HEALTHCHECK 探活，根路径重定向到上下文路径
+    app.get("/api/health", healthHandler);
+    app.get("/", (_req, res) => res.redirect(302, normalizedBase));
   }
 
   app.use((error, _req, res, next) => {
