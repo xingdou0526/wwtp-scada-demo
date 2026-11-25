@@ -1,13 +1,5 @@
 @import "tailwindcss";
 
-@font-face {
-  font-family: "Noto Sans SC";
-  src: url("/fonts/noto-sans-sc.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-}
-
 @theme inline {
   --font-sans: var(--font-ui);
   --color-background: var(--background);
@@ -38,7 +30,7 @@
 
 :root {
   color-scheme: light;
-  --font-ui: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-ui: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --radius: 0.625rem;
   --background: #f8fafc;
   --foreground: #0f172a;

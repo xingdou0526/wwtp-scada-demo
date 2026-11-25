@@ -7,7 +7,7 @@ import { TermProvider } from "@/components/Term";
 import { Badge } from "@/components/ui/badge";
 import type { ActiveAdvice, DoAdjustmentAdvice } from "@/lib/advice";
 import type { Term } from "@/lib/terms";
-import type { MonitorStatus } from "@/lib/types";
+import type { MonitorStatus, StateResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function AdvicePanel({ activeAdvices, doAdjustment, monitorStatus, onFocusAdjustment, onAction, terms }: {
@@ -15,7 +15,7 @@ export function AdvicePanel({ activeAdvices, doAdjustment, monitorStatus, onFocu
   doAdjustment: DoAdjustmentAdvice | null;
   monitorStatus?: MonitorStatus;
   onFocusAdjustment: () => void;
-  onAction: () => void;
+  onAction: (snapshot?: StateResponse) => void;
   terms: Term[];
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);

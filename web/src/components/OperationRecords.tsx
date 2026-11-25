@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClipboardList, Inbox, SearchX } from "lucide-react";
 import { OperationDetail, REVIEW_LABELS, ReviewBadge, reviewStatus } from "@/components/operations/OperationDetail";
 import { Button } from "@/components/ui/button";
@@ -45,40 +45,54 @@ export function OperationLog({ operationId }: { operationId?: string }) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(operationId ?? null);
-  const [initialized, setInitialized] = useState(Boolean(operationId));
+  const initializedRef = useRef(Boolean(operationId));
   const [loadError, setLoadError] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    const controller = new AbortController();
-    let loading = false;
+    let disposed = false;
+    let timer: number | null = null;
+    let controller: AbortController | null = null;
 
     async function refresh() {
-      if (loading) return;
-      loading = true;
+      if (disposed || document.hidden) return;
+      controller?.abort();
+      controller = new AbortController();
       try {
         const next = await fetchOperations(controller.signal);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || disposed) return;
         setRecords(next);
-        if (!initialized) {
+        if (!initializedRef.current) {
           setSelectedId(next[0]?.id ?? null);
-          setInitialized(true);
+          initializedRef.current = true;
         }
         setLoadError("");
       } catch {
-        if (!controller.signal.aborted) setLoadError("读取操作记录失败，正在重试。");
+        if (!controller.signal.aborted && !disposed) setLoadError("读取操作记录失败，正在重试。");
       } finally {
-        loading = false;
+        if (!disposed && !document.hidden) {
+          timer = window.setTimeout(() => { void refresh(); }, 3000);
+        }
       }
     }
 
-    void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, 2000);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
+    const onVisibility = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      if (document.hidden) controller?.abort();
+      else void refresh();
     };
-  }, [initialized, refreshKey]);
+
+    void refresh();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   const hasFilter = filter !== "all" || Boolean(query.trim());
   const visibleRecords = records?.filter((operation) => matchesOperation(operation, filter, query)) ?? [];
@@ -112,7 +126,6 @@ export function OperationLog({ operationId }: { operationId?: string }) {
 
   function handleSaved(saved: OperationRecord) {
     setRecords((current) => current?.map((operation) => operation.id === saved.id ? saved : operation) ?? [saved]);
-    setRefreshKey((key) => key + 1);
   }
 
   return (

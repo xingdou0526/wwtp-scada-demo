@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Activity, Fan } from "lucide-react";
 import { DoAdjustment } from "@/components/DoAdjustment";
 import { ProcessDiagram } from "@/components/process/ProcessDiagram";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DO_ADJUSTMENT, type DoAdjustmentAdvice } from "@/lib/advice";
 import type { RuleLimits } from "@/lib/admin";
-import type { HistoryPoint, SimState } from "@/lib/types";
+import type { HistoryPoint, SimState, StateResponse } from "@/lib/types";
 
 export function ProcessFlow({ state, limits, history, adjustment, focusAdjustmentTick = 0, sessionVersion = 0, onRefresh, children }: {
   state: SimState;
@@ -17,10 +17,12 @@ export function ProcessFlow({ state, limits, history, adjustment, focusAdjustmen
   adjustment: DoAdjustmentAdvice | null;
   focusAdjustmentTick?: number;
   sessionVersion?: number;
-  onRefresh: () => Promise<void>;
+  onRefresh: (snapshot?: StateResponse) => Promise<void>;
   children?: ReactNode;
 }) {
   const [selection, setSelection] = useState<{ advice: DoAdjustmentAdvice | null } | null>(null);
+  const adjustmentRef = useRef(adjustment);
+  adjustmentRef.current = adjustment;
   const openedAdvice = selection?.advice ?? null;
   const { biologicalStage, process, support } = buildProcessStages(state, limits);
   const attention = [...process, ...support].filter(({ status }) => status && status !== "normal").length;
@@ -31,7 +33,7 @@ export function ProcessFlow({ state, limits, history, adjustment, focusAdjustmen
 
   useEffect(() => {
     if (!focusAdjustmentTick) return;
-    setSelection({ advice: adjustment });
+    setSelection({ advice: adjustmentRef.current });
     window.requestAnimationFrame(() => {
       const panel = document.getElementById(DO_ADJUSTMENT.panelId);
       panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });

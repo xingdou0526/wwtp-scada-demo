@@ -44,7 +44,7 @@ function ScenarioCompareCard({ item }: { item: CompareScenario }) {
           <TableHeader className="bg-muted">
             <TableRow>
               <TableHead scope="col" className="h-9 px-2.5">评估指标</TableHead>
-              <TableHead scope="col" className="h-9 px-2.5 text-right">固定目标（2.0）</TableHead>
+              <TableHead scope="col" className="h-9 px-2.5 text-right">固定目标（{fixed.finalSetpoint.toFixed(1)}）</TableHead>
               <TableHead scope="col" className="h-9 px-2.5 text-right">AI 辅助采纳</TableHead>
               <TableHead scope="col" className="h-9 px-2.5 text-right">差值</TableHead>
             </TableRow>

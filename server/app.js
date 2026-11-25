@@ -5,6 +5,7 @@ import cors from "cors";
 import { createSimulation } from "./simulator.js";
 import { createAdvisor, operationReviewStatus } from "./advisor.js";
 import { runBaselineCompare } from "./baseline-compare.js";
+import { gzipMiddleware } from "./compress.js";
 import { AdviceStorageError, openAdviceStore } from "./advice-store.js";
 import { openOperationStore, OperationStorageError } from "./operation-store.js";
 import { ManagementError, openManagementStore } from "./management-store.js";
@@ -14,6 +15,7 @@ const MAX_HISTORY = 240;
 const WARMUP_TICKS = 120;
 const REVIEW_TICK_SECONDS = 10;
 const MAX_FAST_FORWARD = 60;
+const SSE_HEARTBEAT_MS = 20000;
 
 function secondsPerTick(advices) {
   return advices.some((advice) => advice.type === "adjust" && advice.action && !advice.blocked) ? REVIEW_TICK_SECONDS : 1;
@@ -39,6 +41,8 @@ export function createApp({
   const history = [];
   const measuredHistory = [];
   const sessionMarkers = [];
+  const sseClients = new Set();
+  let cachedCompare = null;
   let secondsIntoTick = 0;
   let stepRequested = false;
   let paused = false;
@@ -89,30 +93,7 @@ export function createApp({
     warmup();
   }
 
-  warmup();
-
-  // CORS 必须注册在所有业务路由之前，避免 /api/admin 与 /api/knowledge 缺失跨域头
-  app.use(cors());
-  app.use("/api/admin", managementRoutes(management, sim, advisor));
-  app.get("/api/knowledge/:id", (req, res) => {
-    const entry = management.getKnowledge(req.params.id);
-    if (!entry) return res.status(404).json({ error: "知识条目不存在" });
-    res.json(entry);
-  });
-  app.use(express.json());
-
-  const timer = autoStart
-    ? setInterval(() => {
-        if (paused) return;
-        secondsIntoTick += 1;
-        if (!stepRequested && secondsIntoTick < secondsPerTick(advisor.activeAdvices)) return;
-        secondsIntoTick = 0;
-        stepRequested = false;
-        stepOnce();
-      }, 1000)
-    : null;
-
-  function buildStatePayload() {
+  function buildCorePayload() {
     const pending = advisor.activeAdvices;
     const tickSeconds = secondsPerTick(pending);
     const untilNextTick = stepRequested ? 1 : tickSeconds - secondsIntoTick;
@@ -126,8 +107,6 @@ export function createApp({
     return {
       state: sim.state,
       limits: sim.LIMITS,
-      terms: management.data.terms,
-      history,
       markers,
       activePreset,
       activeAdvice,
@@ -141,8 +120,110 @@ export function createApp({
     };
   }
 
+  function buildStatePayload() {
+    return {
+      ...buildCorePayload(),
+      terms: management.data.terms,
+      history,
+    };
+  }
+
+  function buildDeltaPayload() {
+    return {
+      ...buildCorePayload(),
+      latestPoint: history[history.length - 1] ?? null,
+    };
+  }
+
+  function getBaselineCompare() {
+    if (cachedCompare && cachedCompare.limits === sim.LIMITS) return cachedCompare.result;
+    const result = runBaselineCompare(sim.LIMITS);
+    cachedCompare = { limits: sim.LIMITS, result };
+    return result;
+  }
+
+  function safeWriteSse(client, frame) {
+    if (client.writableEnded || client.destroyed) {
+      sseClients.delete(client);
+      return false;
+    }
+    try {
+      client.write(frame);
+      return true;
+    } catch {
+      sseClients.delete(client);
+      return false;
+    }
+  }
+
+  function sendSse(res, event, data) {
+    safeWriteSse(res, `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  function broadcast(event, payloadFactory) {
+    if (!sseClients.size) return;
+    const payload = payloadFactory();
+    const frame = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of [...sseClients]) {
+      safeWriteSse(client, frame);
+    }
+  }
+
+  const broadcastUpdate = () => broadcast("update", buildDeltaPayload);
+  const broadcastSnapshot = () => broadcast("snapshot", buildStatePayload);
+
+  warmup();
+
+  // CORS 与 Gzip 必须注册在所有业务路由之前
+  app.use(cors());
+  app.use(gzipMiddleware);
+  app.use("/api/admin", managementRoutes(management, sim, advisor, broadcastSnapshot));
+  app.get("/api/knowledge/:id", (req, res) => {
+    const entry = management.getKnowledge(req.params.id);
+    if (!entry) return res.status(404).json({ error: "知识条目不存在" });
+    res.json(entry);
+  });
+  app.use(express.json());
+
+  const timer = autoStart
+    ? setInterval(() => {
+        if (paused) return;
+        secondsIntoTick += 1;
+        const tickSeconds = secondsPerTick(advisor.activeAdvices);
+        if (!stepRequested && secondsIntoTick < tickSeconds) {
+          // 审阅降速期间每 2 秒同步一次倒计时
+          if (tickSeconds > 1 && secondsIntoTick % 2 === 0) broadcastUpdate();
+          return;
+        }
+        secondsIntoTick = 0;
+        stepRequested = false;
+        stepOnce();
+        broadcastUpdate();
+      }, 1000)
+    : null;
+
+  const heartbeat = autoStart
+    ? setInterval(() => {
+        for (const client of [...sseClients]) safeWriteSse(client, ": ping\n\n");
+      }, SSE_HEARTBEAT_MS)
+    : null;
+
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", time: new Date().toISOString() });
+  });
+
+  app.get("/api/events", (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    const cleanup = () => sseClients.delete(res);
+    sseClients.add(res);
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    res.on("error", cleanup);
+    sendSse(res, "snapshot", buildStatePayload());
   });
 
   app.get("/api/state", (_req, res) => {
@@ -150,7 +231,7 @@ export function createApp({
   });
 
   app.get("/api/compare", (_req, res) => {
-    res.json(runBaselineCompare(sim.LIMITS));
+    res.json(getBaselineCompare());
   });
 
   app.get("/api/advice/history", (_req, res) => {
@@ -161,6 +242,7 @@ export function createApp({
     const { paused: nextPaused } = req.body ?? {};
     if (typeof nextPaused !== "boolean") return res.status(400).json({ error: "请提供有效的暂停状态" });
     paused = nextPaused;
+    broadcastUpdate();
     res.json({ ok: true, paused, snapshot: buildStatePayload() });
   });
 
@@ -172,6 +254,7 @@ export function createApp({
     secondsIntoTick = 0;
     stepRequested = false;
     for (let i = 0; i < raw; i++) stepOnce();
+    broadcastSnapshot();
     res.json({ ok: true, advanced: raw, snapshot: buildStatePayload() });
   });
 
@@ -204,6 +287,7 @@ export function createApp({
       for (let i = 0; i < 8; i++) stepOnce();
     }
     activePreset = preset;
+    broadcastSnapshot();
     res.json({ ok: true, preset, snapshot: buildStatePayload() });
   });
 
@@ -215,6 +299,7 @@ export function createApp({
     secondsIntoTick = 0;
     stepRequested = false;
     stepOnce();
+    broadcastUpdate();
     res.json({ ok: true, scenario: sim.state.scenario, snapshot: buildStatePayload() });
   });
 
@@ -226,6 +311,7 @@ export function createApp({
     secondsIntoTick = 0;
     stepRequested = false;
     stepOnce();
+    broadcastUpdate();
     res.json({ ok: true, fault: sim.state.fault, snapshot: buildStatePayload() });
   });
 
@@ -234,13 +320,15 @@ export function createApp({
     if (!result.ok) return res.status(400).json(result);
     const { id, executeTick, action } = result.operation;
     sessionMarkers.push({ id, tick: executeTick, from: action.from, to: action.to });
-    res.json(result);
+    broadcastUpdate();
+    res.json({ ...result, snapshot: buildStatePayload() });
   });
 
   app.post("/api/advice/:id/ignore", (req, res) => {
     const result = advisor.ignore(req.params.id);
     if (!result.ok) return res.status(400).json(result);
-    res.json(result);
+    broadcastUpdate();
+    res.json({ ...result, snapshot: buildStatePayload() });
   });
 
   app.get("/api/operations", (req, res) => {
@@ -260,12 +348,22 @@ export function createApp({
 
   app.post("/api/reset", (_req, res) => {
     resetAll();
+    broadcastSnapshot();
     res.json({ ok: true, snapshot: buildStatePayload() });
   });
 
   if (staticDir && existsSync(join(staticDir, "index.html"))) {
-    app.use(express.static(staticDir));
-    app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
+    app.use(express.static(staticDir, {
+      setHeaders(res, filePath) {
+        if (/[\\/]assets[\\/]/.test(filePath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        } else if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-cache");
+        }
+      },
+    }));
+    app.get(/^(?!\/(?:api|assets)(?:\/|$)).*/, (_req, res) => {
+      res.setHeader("Cache-Control", "no-cache");
       res.sendFile(join(staticDir, "index.html"));
     });
   }
@@ -294,6 +392,15 @@ export function createApp({
     stepOnce,
     close() {
       if (timer) clearInterval(timer);
+      if (heartbeat) clearInterval(heartbeat);
+      for (const client of [...sseClients]) {
+        try {
+          client.end();
+        } catch {
+          // Ignore already-closed SSE connections on shutdown.
+        }
+      }
+      sseClients.clear();
     },
   };
 }

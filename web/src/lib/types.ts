@@ -82,6 +82,10 @@ export interface StateResponse {
   };
 }
 
+export interface StateDelta extends Omit<StateResponse, "terms" | "history"> {
+  latestPoint: HistoryPoint | null;
+}
+
 export interface PolicyMetrics {
   kwh: number;
   minDo: number;

@@ -14,8 +14,25 @@ import {
   compareAdviceIdDesc,
 } from "./advice-builders.js";
 
-let adviceSeq = 0;
 const MAX_NOTE_LENGTH = 1000;
+const MAX_PERSISTED_ADVICES = 500;
+
+function pruneRecords(list, limit) {
+  if (!Number.isFinite(limit) || limit <= 0 || list.length <= limit) return list;
+  const pending = [];
+  const executed = [];
+  const archived = [];
+  for (const item of list) {
+    if (item.status === "pending") pending.push(item);
+    else if (item.status === "executed") executed.push(item);
+    else archived.push(item);
+  }
+  const budget = Math.max(0, limit - pending.length);
+  const keptExecuted = executed.slice(0, budget);
+  const keptArchived = archived.slice(0, Math.max(0, budget - keptExecuted.length));
+  const keepIds = new Set([...pending, ...keptExecuted, ...keptArchived].map(({ id }) => id));
+  return list.filter(({ id }) => keepIds.has(id));
+}
 
 function executedRecord(advice, operation) {
   return {
@@ -32,7 +49,9 @@ function executedRecord(advice, operation) {
 export function createAdvisor(sim, {
   initialOperations = [], saveOperations = () => {},
   initialAdvices = [], saveAdvices = () => {},
+  maxAdvices = MAX_PERSISTED_ADVICES,
 } = {}) {
+  let adviceSeq = 0;
   const advices = [];
   let operations = initialOperations;
   let loadRising = false;
@@ -45,7 +64,7 @@ export function createAdvisor(sim, {
 
   const operationsByAdvice = new Map(operations.map((operation) => [operation.adviceId, operation]));
   const restartedAt = new Date().toISOString();
-  let records = initialAdvices.map((advice) => {
+  const reconciled = initialAdvices.map((advice) => {
     if (advice.status !== "pending") return advice;
     const operation = operationsByAdvice.get(advice.id);
     return operation ? executedRecord(advice, operation) : {
@@ -53,7 +72,10 @@ export function createAdvisor(sim, {
       endedTick: null, endedClockMinutes: null,
     };
   });
-  if (records.some((record, index) => record !== initialAdvices[index])) saveAdvices(records);
+  let records = pruneRecords(reconciled, maxAdvices);
+  if (records.length !== initialAdvices.length || records.some((record, index) => record !== initialAdvices[index])) {
+    saveAdvices(records);
+  }
 
   function commitOperations(next) {
     saveOperations(next);
@@ -61,8 +83,9 @@ export function createAdvisor(sim, {
   }
 
   function commitAdvices(next) {
-    saveAdvices(next);
-    records = next;
+    const pruned = pruneRecords(next, maxAdvices);
+    saveAdvices(pruned);
+    records = pruned;
   }
 
   function endedAdvice(advice, status, endReason, details = {}) {

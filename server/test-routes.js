@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -193,6 +193,8 @@ test("MBR 膜通量随进水流量联动变化，且演示节奏控制、快捷�
     body: JSON.stringify({ operatorNote: "演示确认" }),
   })).json();
   assert.equal(execRes.ok, true);
+  assert.ok(execRes.snapshot, "执行建议响应应直接返回最新 snapshot");
+  assert.equal(execRes.snapshot.state.bio.doSetpoint, raiseAdvice.action.to);
 
   const afterExec = await (await fetch(`${baseUrl}/api/sim/fast-forward`, {
     method: "POST",
@@ -222,16 +224,39 @@ test("MBR 膜通量随进水流量联动变化，且演示节奏控制、快捷�
   assert.ok(faultPreset.snapshot.activeAdvices.some((a) => a.kind === "inspect-airflow"));
   assert.ok(faultPreset.snapshot.activeAdvices.every((a) => a.type !== "adjust"), "仪表异常期间不应存在调节建议");
 
-  // 5. 同随机种子效益对比接口
+  // 5. 同随机种子效益对比接口（缓存命中 + 规则变更自动失效 + 不串改主建议编号）
+  const beforeCompareId = faultPreset.snapshot.activeAdvices[0].id;
   const compare = await (await fetch(`${baseUrl}/api/compare`)).json();
   assert.equal(compare.scenarios.length, 2);
   const nightCmp = compare.scenarios.find((s) => s.key === "night");
   assert.ok(nightCmp.delta.kwh < 0, "夜间低负荷场景 AI 辅助应实现节能");
+
+  // 忽略一条排查建议也应直接返回最新 snapshot，且不会触发 adviceSeq 跳号
+  const ignoreRes = await (await fetch(`${baseUrl}/api/advice/${beforeCompareId}/ignore`, { method: "POST" })).json();
+  assert.equal(ignoreRes.ok, true);
+  assert.ok(ignoreRes.snapshot, "忽略建议响应应直接返回最新 snapshot");
+  assert.equal(ignoreRes.snapshot.activeAdvices.some((a) => a.id === beforeCompareId), false);
+
+  const compareCached = await (await fetch(`${baseUrl}/api/compare`)).json();
+  assert.deepEqual(compareCached, compare);
+
+  // 修改后台氨氮内控值后，/api/compare 缓存应自动刷新
+  const nextLimits = { ...faultPreset.snapshot.limits, nh4InternalLimit: 0.8 };
+  const putLimits = await fetch(`${baseUrl}/api/admin/limits`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(nextLimits),
+  });
+  assert.equal(putLimits.status, 200);
+  const compareUpdated = await (await fetch(`${baseUrl}/api/compare`)).json();
+  assert.equal(compareUpdated.nh4InternalLimit, 0.8);
 });
 
-test("配置 staticDir 时可托管前端静态页并保持 /api 404 隔离", async (t) => {
+test("配置 staticDir 时可托管前端静态页、启用 Gzip 与缓存头并保持 /api 404 隔离", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "wwtp-static-test-"));
+  mkdirSync(join(dir, "assets"), { recursive: true });
   writeFileSync(join(dir, "index.html"), "<!doctype html><title>WWTP</title>");
+  writeFileSync(join(dir, "assets", "app-abc123.js"), `console.log(${JSON.stringify("x".repeat(2048))});`);
   const instance = createApp({
     managementFile: join(dir, "management.json"),
     operationsFile: join(dir, "operations.json"),
@@ -253,8 +278,83 @@ test("配置 staticDir 时可托管前端静态页并保持 /api 404 隔离", as
 
   const home = await fetch(`${baseUrl}/`);
   assert.equal(home.status, 200);
+  assert.equal(home.headers.get("cache-control"), "no-cache");
   assert.match(await home.text(), /<title>WWTP<\/title>/);
+
+  // History 路由直达子页面应回落到 index.html，而缺失静态资源与未知 API 仍返回 404
+  const adminPage = await fetch(`${baseUrl}/admin`);
+  assert.equal(adminPage.status, 200);
+  assert.equal(adminPage.headers.get("cache-control"), "no-cache");
+  assert.match(await adminPage.text(), /<title>WWTP<\/title>/);
+
+  const missingAsset = await fetch(`${baseUrl}/assets/missing.js`);
+  assert.equal(missingAsset.status, 404);
+
+  const asset = await fetch(`${baseUrl}/assets/app-abc123.js`, { headers: { "Accept-Encoding": "gzip" } });
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("content-encoding"), "gzip");
+  assert.match(asset.headers.get("cache-control") ?? "", /immutable/);
+  assert.match(await asset.text(), /console\.log/);
+
+  const stateRes = await fetch(`${baseUrl}/api/state`, { headers: { "Accept-Encoding": "gzip" } });
+  assert.equal(stateRes.status, 200);
+  assert.equal(stateRes.headers.get("content-encoding"), "gzip");
+  const stateJson = await stateRes.json();
+  assert.equal(stateJson.history.length, 120);
 
   const missingApi = await fetch(`${baseUrl}/api/not-found`);
   assert.equal(missingApi.status, 404);
+});
+
+test("SSE /api/events 首连推送全量快照、后续推送轻量增量且关闭代理缓冲与 Gzip", async (t) => {
+  const { baseUrl } = await createTestServer(t);
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+
+  const res = await fetch(`${baseUrl}/api/events`, {
+    headers: { Accept: "text/event-stream", "Accept-Encoding": "gzip" },
+    signal: controller.signal,
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") ?? "", /^text\/event-stream/);
+  assert.equal(res.headers.get("x-accel-buffering"), "no");
+  assert.equal(res.headers.get("content-encoding"), null, "SSE 流不应被 Gzip 缓冲");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  async function nextEvent() {
+    while (!buffer.includes("\n\n")) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("SSE stream closed prematurely");
+      buffer += decoder.decode(value, { stream: true });
+    }
+    const splitAt = buffer.indexOf("\n\n");
+    const raw = buffer.slice(0, splitAt);
+    buffer = buffer.slice(splitAt + 2);
+    const event = /^event:\s*(.+)$/m.exec(raw)?.[1];
+    const data = JSON.parse(/^data:\s*(.+)$/m.exec(raw)?.[1] ?? "null");
+    return { event, data };
+  }
+
+  const first = await nextEvent();
+  assert.equal(first.event, "snapshot");
+  assert.equal(first.data.history.length, 120);
+  assert.ok(Array.isArray(first.data.terms));
+
+  // 触发故障后应推送轻量增量事件（不含全量 history 与 terms）
+  const faultRes = await fetch(`${baseUrl}/api/fault`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "doOffline", enabled: true }),
+  });
+  assert.equal(faultRes.status, 200);
+
+  const delta = await nextEvent();
+  assert.equal(delta.event, "update");
+  assert.equal(delta.data.state.fault.doOffline, true);
+  assert.ok(delta.data.latestPoint);
+  assert.equal("history" in delta.data, false);
+  assert.equal("terms" in delta.data, false);
+  controller.abort();
 });

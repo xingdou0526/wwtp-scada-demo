@@ -235,3 +235,35 @@ test("超过内存条数上限时仍保留未到期的独立水质排查", () =>
   assert.ok(advisor.adviceHistory.length + advisor.activeAdvices.length > 50);
   assert.equal(advisor.activeAdvices.find(({ kind }) => kind === "inspect-nh4")?.id, original.id);
 });
+
+test("持久化建议条数达到上限时自动裁剪旧归档，优先保留待处理和已执行记录，且实例编号互不干扰", (t) => {
+  const file = temporaryStore(t);
+  const sim = createSimulation();
+  const advisor = createAdvisor(sim, { ...openAdviceStore(file), maxAdvices: 5 });
+
+  // 先执行一条建议，确认裁剪时会优先保留已执行记录
+  const firstRaise = raise(sim, advisor);
+  assert.equal(firstRaise.id, "ADV-001");
+  assert.ok(advisor.execute(firstRaise.id).ok);
+
+  // 另一套独立实例（模拟基线对比）生成多条建议，不应污染主实例的 adviceSeq
+  const isolatedSim = createSimulation();
+  const isolatedAdvisor = createAdvisor(isolatedSim);
+  for (let i = 0; i < 4; i++) {
+    isolatedSim.state.tick += 70;
+    const obs = observe(isolatedSim, isolatedAdvisor);
+    isolatedAdvisor.ignore(obs.id);
+  }
+
+  // 主实例继续产生超过 maxAdvices 的忽略记录
+  for (let i = 0; i < 8; i++) {
+    sim.state.tick += 70;
+    const obs = observe(sim, advisor);
+    if (i === 0) assert.equal(obs.id, "ADV-002", "独立实例不应串改主实例建议编号");
+    assert.ok(advisor.ignore(obs.id).ok);
+  }
+
+  const persisted = openAdviceStore(file).initialAdvices;
+  assert.equal(persisted.length, 5, "持久化文件应严格控制在 maxAdvices 上限内");
+  assert.ok(persisted.some((item) => item.id === firstRaise.id), "已执行建议应优先保留不被裁剪");
+});

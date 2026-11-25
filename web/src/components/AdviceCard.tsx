@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DO_ADJUSTMENT, type ActiveAdvice, type DoAdjustmentAdvice } from "@/lib/advice";
 import { postJson } from "@/lib/api";
+import type { StateResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export const TYPE_META: Record<ActiveAdvice["type"], { label: string; icon: LucideIcon; className: string }> = {
@@ -89,7 +90,7 @@ export function AdviceCard({ advice, doAdjustment, onFocusAdjustment, onAction }
   advice: ActiveAdvice;
   doAdjustment: DoAdjustmentAdvice | null;
   onFocusAdjustment: () => void;
-  onAction: () => void;
+  onAction: (snapshot?: StateResponse) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,8 +107,8 @@ export function AdviceCard({ advice, doAdjustment, onFocusAdjustment, onAction }
     setBusy(true);
     setError(null);
     try {
-      await postJson(`/api/advice/${encodeURIComponent(advice.id)}/ignore`);
-      onAction();
+      const res = await postJson<{ ok: true; snapshot?: StateResponse }>(`/api/advice/${encodeURIComponent(advice.id)}/ignore`);
+      onAction(res.snapshot);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {

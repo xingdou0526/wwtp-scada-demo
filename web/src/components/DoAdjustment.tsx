@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DO_ADJUSTMENT, type DoAdjustmentAdvice } from "@/lib/advice";
 import { postJson } from "@/lib/api";
+import type { StateResponse } from "@/lib/types";
 
 export function DoAdjustment({ advice, currentSetpoint, available, hasNewAdvice, onSwitchToLatest, onRefresh, onClose, children }: {
   advice: DoAdjustmentAdvice | null;
@@ -12,7 +13,7 @@ export function DoAdjustment({ advice, currentSetpoint, available, hasNewAdvice,
   available: boolean;
   hasNewAdvice: boolean;
   onSwitchToLatest: () => void;
-  onRefresh: () => Promise<void>;
+  onRefresh: (snapshot?: StateResponse) => Promise<void>;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -37,13 +38,18 @@ export function DoAdjustment({ advice, currentSetpoint, available, hasNewAdvice,
     if (!advice || disabled || executed) return;
     setBusy(true);
     setError(null);
+    let snapshot: StateResponse | undefined;
     try {
-      await postJson(`/api/advice/${encodeURIComponent(advice.id)}/execute`, { operatorNote: note });
+      const res = await postJson<{ ok: true; snapshot?: StateResponse }>(
+        `/api/advice/${encodeURIComponent(advice.id)}/execute`,
+        { operatorNote: note },
+      );
+      snapshot = res.snapshot;
       setExecuted(true);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
-      await onRefresh();
+      await onRefresh(snapshot);
       setBusy(false);
     }
   }
