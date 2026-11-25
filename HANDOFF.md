@@ -29,5 +29,21 @@ AI 侧栏基于规则生成建议。人工在生化池节点确认后，仿真�
 - **后端验证测试**：`cd server && npm run verify`
 - **前端类型检查与构建**：`cd web && npx tsc --noEmit && npm run build`
 - **常用环境变量**：
+  - `WWTP_HOST`：后端监听地址（本地默认 `127.0.0.1`，容器内默认 `0.0.0.0`）
   - `WWTP_PORT`：后端监听端口与 Vite 代理目标端口（默认 `3001`）
+  - `WWTP_STATIC_DIR`：生产态静态前端目录（默认自动检测 `web/dist`）
   - `WWTP_MANAGEMENT_FILE` / `WWTP_ADVICE_FILE` / `WWTP_OPERATIONS_FILE`：自定义后台配置、历史建议、操作记录 JSON 持久化路径（默认保存在 `server/data/` 目录）
+
+## Docker 单容器部署
+
+仓库已内置多阶段 [Dockerfile](./Dockerfile) 与 [docker-compose.yml](./docker-compose.yml)，单容器同时提供 `/api/*` 接口与构建后的前端页面（数据通过命名卷 `wwtp_data` 持久化到 `/app/server/data`）：
+
+```bash
+# 默认映射到宿主机 3001 端口
+docker compose up -d --build
+
+# 自定义宿主机映射端口（如 8080）
+WWTP_PORT=8080 docker compose up -d --build
+```
+
+> 远程公网部署提示：当前 Demo 未内置登录鉴权且为单实例共享仿真状态，若面向公网开放，建议在外层 Nginx/Caddy 增加 Basic Auth 或限制内网访问。

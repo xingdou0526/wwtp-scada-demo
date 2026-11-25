@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import express from "express";
 import cors from "cors";
 import { createSimulation } from "./simulator.js";
@@ -21,6 +23,7 @@ export function createApp({
   managementFile,
   operationsFile,
   adviceFile,
+  staticDir,
   autoStart = true,
   random,
 } = {}) {
@@ -259,6 +262,13 @@ export function createApp({
     resetAll();
     res.json({ ok: true, snapshot: buildStatePayload() });
   });
+
+  if (staticDir && existsSync(join(staticDir, "index.html"))) {
+    app.use(express.static(staticDir));
+    app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
+      res.sendFile(join(staticDir, "index.html"));
+    });
+  }
 
   app.use((error, _req, res, next) => {
     if (error instanceof ManagementError) {

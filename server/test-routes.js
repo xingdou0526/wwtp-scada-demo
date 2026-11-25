@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -227,4 +227,34 @@ test("MBR 膜通量随进水流量联动变化，且演示节奏控制、快捷�
   assert.equal(compare.scenarios.length, 2);
   const nightCmp = compare.scenarios.find((s) => s.key === "night");
   assert.ok(nightCmp.delta.kwh < 0, "夜间低负荷场景 AI 辅助应实现节能");
+});
+
+test("配置 staticDir 时可托管前端静态页并保持 /api 404 隔离", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "wwtp-static-test-"));
+  writeFileSync(join(dir, "index.html"), "<!doctype html><title>WWTP</title>");
+  const instance = createApp({
+    managementFile: join(dir, "management.json"),
+    operationsFile: join(dir, "operations.json"),
+    adviceFile: join(dir, "advices.json"),
+    staticDir: dir,
+    autoStart: false,
+  });
+  const server = instance.app.listen(0, "127.0.0.1");
+  t.after(() => {
+    instance.close();
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise((res, rej) => {
+    server.once("listening", res);
+    server.once("error", rej);
+  });
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const home = await fetch(`${baseUrl}/`);
+  assert.equal(home.status, 200);
+  assert.match(await home.text(), /<title>WWTP<\/title>/);
+
+  const missingApi = await fetch(`${baseUrl}/api/not-found`);
+  assert.equal(missingApi.status, 404);
 });
