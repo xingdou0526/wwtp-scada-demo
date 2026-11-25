@@ -1,6 +1,9 @@
 // API 封装
-export async function fetchState() {
-  const r = await fetch("/api/state");
+import type { StateResponse } from "@/lib/types";
+export { formatClock, formatDateTime, formatTick } from "@/lib/time";
+
+export async function fetchState(signal?: AbortSignal): Promise<StateResponse> {
+  const r = await fetch("/api/state", { signal });
   if (!r.ok) throw new Error("state fetch failed");
   return r.json();
 }
@@ -18,12 +21,13 @@ export async function requestJson<T>(url: string, options: { method?: string; bo
   return data;
 }
 
-export function postJson(url: string, body?: unknown) {
-  return requestJson<any>(url, { method: "POST", body });
+export function postJson<T = unknown>(url: string, body?: unknown) {
+  return requestJson<T>(url, { method: "POST", body });
 }
 
-interface OperationSnapshot {
+export interface OperationSnapshot {
   tick: number;
+  clockMinutes?: number;
   do: number;
   doSetpoint: number;
   airflow: number;
@@ -70,17 +74,6 @@ export async function fetchOperations(signal: AbortSignal): Promise<OperationRec
 }
 
 export async function saveOperationFeedback(id: string, feedback: OperationFeedbackInput): Promise<OperationRecord> {
-  const data = await postJson(`/api/operations/${encodeURIComponent(id)}/feedback`, feedback);
+  const data = await postJson<{ ok: true; operation: OperationRecord }>(`/api/operations/${encodeURIComponent(id)}/feedback`, feedback);
   return data.operation;
-}
-
-export function formatClock(minutes: number) {
-  const m = ((minutes % 1440) + 1440) % 1440;
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-}
-
-export function formatTick(tick: number) {
-  return `T+${tick} min`;
 }

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { BookOpen } from "lucide-react";
+import { MarkdownView } from "@/components/MarkdownView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { fetchKnowledge, type KnowledgeEntry } from "@/lib/admin";
+import { formatDateTime } from "@/lib/time";
 
 export function KnowledgeReference({ id }: { id: string }) {
   return (
@@ -13,7 +15,7 @@ export function KnowledgeReference({ id }: { id: string }) {
           <BookOpen aria-hidden className="size-3.5" /> 知识条目 {id}
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
         <KnowledgeArticle id={id} />
       </DialogContent>
     </Dialog>
@@ -23,6 +25,7 @@ export function KnowledgeReference({ id }: { id: string }) {
 function KnowledgeArticle({ id }: { id: string }) {
   const [entry, setEntry] = useState<KnowledgeEntry>();
   const [error, setError] = useState("");
+  const [showRaw, setShowRaw] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -36,14 +39,25 @@ function KnowledgeArticle({ id }: { id: string }) {
     <>
       <DialogHeader className="pr-6">
         <DialogTitle>{entry?.title ?? "建议引用的知识条目"}</DialogTitle>
-        <DialogDescription>{id}{entry?.updatedAt && ` · 更新于 ${new Date(entry.updatedAt).toLocaleString("zh-CN")}`}</DialogDescription>
+        <DialogDescription>{id}{entry?.updatedAt && ` · 更新于 ${formatDateTime(entry.updatedAt)}`}</DialogDescription>
       </DialogHeader>
       {error && <p role="alert" className="text-sm text-critical">{error}</p>}
       {!entry && !error && <p role="status" className="text-sm text-muted-foreground">正在读取知识条目…</p>}
       {entry && (
         <section className="space-y-3 rounded-lg border bg-muted p-4">
-          {entry.format === "markdown" && <Badge variant="outline">Markdown 原文</Badge>}
-          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{entry.content}</p>
+          {entry.format === "markdown" && (
+            <div className="flex items-center justify-between gap-2">
+              <Badge variant="outline">Markdown</Badge>
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setShowRaw((v) => !v)}>
+                {showRaw ? "预览渲染" : "查看原文"}
+              </Button>
+            </div>
+          )}
+          {entry.format === "markdown" && !showRaw ? (
+            <MarkdownView content={entry.content} />
+          ) : (
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{entry.content}</p>
+          )}
         </section>
       )}
     </>

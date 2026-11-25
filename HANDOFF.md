@@ -21,3 +21,13 @@ AI 侧栏基于规则生成建议。人工在生化池节点确认后，仿真�
 ## 已验证的演示流程
 
 进水氨氮冲击触发 DO 调节建议，操作员在生化池确认，系统自动复评，操作员保存反馈，再从历史建议打开关联记录。仪表异常场景也已验证排查提醒、调节拦截、主动忽略留痕及复位后的记录查询。
+
+## 本地运行与测试
+
+- **启动后端**（默认 `http://127.0.0.1:3001`）：`cd server && npm run dev`
+- **启动前端**（默认 `http://localhost:5173`，通过 Vite 代理 `/api`）：`cd web && npm run dev`
+- **后端验证测试**：`cd server && npm run verify`
+- **前端类型检查与构建**：`cd web && npx tsc --noEmit && npm run build`
+- **常用环境变量**：
+  - `WWTP_PORT`：后端监听端口与 Vite 代理目标端口（默认 `3001`）
+  - `WWTP_MANAGEMENT_FILE` / `WWTP_ADVICE_FILE` / `WWTP_OPERATIONS_FILE`：自定义后台配置、历史建议、操作记录 JSON 持久化路径（默认保存在 `server/data/` 目录）

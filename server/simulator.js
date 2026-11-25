@@ -42,6 +42,7 @@ export function createSimulation(configuredLimits = LIMITS, { random = Math.rand
 
   let driftAccum = 0;
   let stuckValue = null;
+  let spikeTicks = 0;
 
   function updateInfluent() {
     const s = state.scenario;
@@ -111,41 +112,57 @@ export function createSimulation(configuredLimits = LIMITS, { random = Math.rand
   }
 
   function updateMembrane() {
-    state.membrane.tmp = clamp(state.membrane.tmp + noise(0.05) + 0.002, 12, 35);
-    state.membrane.flux = clamp(15 + noise(0.3), 10, 20);
+    // 膜通量与进水流量联动（暴雨抬升、夜间低负荷回落），TMP 随通量负荷轻微响应
+    const targetFlux = clamp(15 * (state.influent.flow / BASE.flow), 8, 24);
+    state.membrane.flux = clamp(state.membrane.flux + (targetFlux - state.membrane.flux) * 0.25 + noise(0.15), 8, 24);
+    const tmpDrift = state.membrane.flux > 17 ? 0.008 : 0.002;
+    state.membrane.tmp = clamp(state.membrane.tmp + noise(0.05) + tmpDrift, 12, 35);
   }
 
   function updateMeasurement() {
     const { bio, measured, fault } = state;
     let value = bio.do + noise(0.02);
-    let quality = "good";
-    let faultType = null;
 
     if (fault.doDrift) {
       driftAccum = Math.min(driftAccum + 0.004, 0.9);
       value -= driftAccum;
-      quality = "suspect";
-      faultType = "drift";
     } else {
       driftAccum = 0;
     }
+
+    if (fault.doSpike) {
+      if (spikeTicks % 10 === 0) value += 1.5;
+      spikeTicks += 1;
+    } else {
+      spikeTicks = 0;
+    }
+
     if (fault.doStuck) {
       if (stuckValue === null) stuckValue = bio.do;
       value = stuckValue;
-      quality = "bad";
-      faultType = "stuck";
     } else {
       stuckValue = null;
     }
-    if (fault.doSpike && state.tick % 25 === 0) {
-      value += 1.5;
-      quality = "suspect";
-      faultType = "spike";
-    }
+
     if (fault.doOffline) {
       value = null;
+    }
+
+    // 故障优先级：offline > stuck > spike > drift，避免低优先级故障覆盖高优先级状态
+    let quality = "good";
+    let faultType = null;
+    if (fault.doOffline) {
       quality = "bad";
       faultType = "offline";
+    } else if (fault.doStuck) {
+      quality = "bad";
+      faultType = "stuck";
+    } else if (fault.doSpike) {
+      quality = "suspect";
+      faultType = "spike";
+    } else if (fault.doDrift) {
+      quality = "suspect";
+      faultType = "drift";
     }
 
     measured.do = value === null ? null : Math.max(0, value);
@@ -185,6 +202,7 @@ export function createSimulation(configuredLimits = LIMITS, { random = Math.rand
     Object.keys(state).forEach((k) => { state[k] = fresh.state[k]; });
     driftAccum = 0;
     stuckValue = null;
+    spikeTicks = 0;
   }
 
   function snapshot() {
